@@ -1,0 +1,9 @@
+model:
+  id: Qwen/Qwen3-0.6B
+  thinking: false
+  max_seq_length: 1024
+seed: 3407
+loss: completion
+backend: fake
+limit: 32
+batch_size: 1
