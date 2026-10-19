@@ -16,6 +16,7 @@ class LicenceError(Exception):
 class Source:
     id: str
     licence: str
+    path: str = ""
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class Pack:
     id: str
     sources: tuple[Source, ...]
     attribution: tuple[str, ...]
+    dev_fraction: float = 0.1
 
 
 def load_pack(path: str | Path) -> Pack:
@@ -31,7 +33,13 @@ def load_pack(path: str | Path) -> Pack:
         raise LicenceError(f"{path}: pack file is empty")
     sources = tuple(_source(item) for item in raw.get("sources") or [])
     attribution = tuple(raw.get("attribution") or ())
-    return Pack(id=str(raw.get("id") or ""), sources=sources, attribution=attribution)
+    dev_fraction = raw.get("dev_fraction", 0.1)
+    return Pack(
+        id=str(raw.get("id") or ""),
+        sources=sources,
+        attribution=attribution,
+        dev_fraction=float(dev_fraction),
+    )
 
 
 def _source(item: object) -> Source:
@@ -43,4 +51,4 @@ def _source(item: object) -> Source:
         licence = ""
     if licence not in ALLOWED_LICENCES:
         raise LicenceError(f"{source_id}: licence {licence!r} is not allowed")
-    return Source(id=source_id, licence=licence)
+    return Source(id=source_id, licence=licence, path=str(item.get("path") or ""))
