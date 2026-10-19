@@ -52,6 +52,48 @@ def test_published_test_id_labelled_as_train_fails():
     assert PUBLISHED_TEST[0] in str(exc.value)
 
 
+def test_published_assignment_lists_every_contract():
+    import csv
+
+    rows = list(
+        csv.DictReader(
+            Path("src/rosai/cuad_published_split.csv").open(encoding="utf-8")
+        )
+    )
+    train = [row["document_id"] for row in rows if row["split"] == "train"]
+    test = [row["document_id"] for row in rows if row["split"] == "test"]
+    assert train[:3] == list(PUBLISHED_TRAIN)
+    assert test[:3] == list(PUBLISHED_TEST)
+    assert len(train) == 408
+    assert len(set(train)) == 408
+    assert len(test) == 102
+    assert len(set(test)) == 102
+    assert set(train).isdisjoint(test)
+
+
+def test_published_split_rejects_an_unknown_contract(tmp_path):
+    labels = tmp_path / "labels.csv"
+    labels.write_text(
+        "document_id,split,Governing Law\nnot-a-cuad-contract,train,\n",
+        encoding="utf-8",
+    )
+    pack_path = tmp_path / "pack.yaml"
+    pack_path.write_text(
+        "id: probe\n"
+        "split: published\n"
+        "sources:\n"
+        "  - id: probe\n"
+        "    licence: cc-by-4.0\n"
+        f"    path: {tmp_path}\n"
+        "attribution:\n"
+        '  - "The Atticus Project, CUAD v1, CC BY 4.0"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(SplitError) as exc:
+        prepare(load_pack(pack_path))
+    assert "not-a-cuad-contract" in str(exc.value)
+
+
 @pytest.mark.skipif(
     os.environ.get("ROSAI_DOWNLOAD_CUAD") != "1",
     reason="set ROSAI_DOWNLOAD_CUAD=1 to download CUAD",
@@ -79,7 +121,14 @@ def test_checked_in_ids_match_published_cuad_files():
 
     train_titles = titles("train_separate_questions.json")
     test_titles = titles("test.json")
-    assert set(PUBLISHED_TRAIN) <= train_titles
-    assert set(PUBLISHED_TEST) <= test_titles
-    assert set(PUBLISHED_TRAIN).isdisjoint(test_titles)
-    assert set(PUBLISHED_TEST).isdisjoint(train_titles)
+    import csv
+
+    rows = list(
+        csv.DictReader(
+            Path("src/rosai/cuad_published_split.csv").open(encoding="utf-8")
+        )
+    )
+    checked_in_train = {row["document_id"] for row in rows if row["split"] == "train"}
+    checked_in_test = {row["document_id"] for row in rows if row["split"] == "test"}
+    assert checked_in_train == train_titles
+    assert checked_in_test == test_titles
