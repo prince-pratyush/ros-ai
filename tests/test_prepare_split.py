@@ -20,6 +20,20 @@ PUBLISHED_TEST = (
     "DovaPharmaceuticalsInc_20181108_10-Q_EX-10.2_11414857_EX-10.2_Promotion Agreement",
 )
 PINNED_REVISION = "6d9a118fb629814c4384a1e63cfc84f5c01894b3"
+CUAD_COMMIT = "7aad649183846688381a147eeb3601aff590fe4a"
+CUAD_DATA_URL = (
+    "https://github.com/TheAtticusProject/cuad/raw/"
+    "7aad649183846688381a147eeb3601aff590fe4a/data.zip"
+)
+CUAD_DATA_SHA256 = "f8161d18bea4e9c05e78fa6dda61c19c846fb8087ea969c172753bc2f45b999a"
+
+
+def test_legal_pack_pins_cuad_data_zip():
+    pack = load_pack(Path("packs/legal.yaml"))
+    source = {item.id: item for item in pack.sources}["theatticusproject/cuad"]
+    assert source.revision == CUAD_COMMIT
+    assert source.url == CUAD_DATA_URL
+    assert source.sha256 == CUAD_DATA_SHA256
 
 
 def test_legal_pack_pins_cuad_qa_revision():
@@ -104,15 +118,19 @@ def test_checked_in_ids_match_published_cuad_files():
     import zipfile
     from io import BytesIO
 
+    from rosai.fetch import download
+
     commits = json.load(
         urllib.request.urlopen(
             "https://huggingface.co/api/datasets/theatticusproject/cuad-qa/commits/main"
         )
     )
     assert commits[0]["id"] == PINNED_REVISION
-    payload = urllib.request.urlopen(
-        "https://github.com/TheAtticusProject/cuad/raw/main/data.zip"
-    ).read()
+    source = {
+        item.id: item for item in load_pack(Path("packs/legal.yaml")).sources
+    }["theatticusproject/cuad"]
+    assert source.url == CUAD_DATA_URL
+    payload = download(source)
     archive = zipfile.ZipFile(BytesIO(payload))
 
     def titles(name: str) -> set[str]:

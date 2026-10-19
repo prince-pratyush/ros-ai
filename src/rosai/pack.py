@@ -18,6 +18,8 @@ class Source:
     licence: str
     path: str = ""
     revision: str = ""
+    url: str = ""
+    sha256: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,4 +61,6 @@ def _source(item: object) -> Source:
         licence=licence,
         path=str(item.get("path") or ""),
         revision=str(item.get("revision") or ""),
+        url=str(item.get("url") or ""),
+        sha256=str(item.get("sha256") or ""),
     )
