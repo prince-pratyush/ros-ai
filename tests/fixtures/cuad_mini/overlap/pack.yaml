@@ -1,0 +1,8 @@
+id: cuad-mini-overlap
+dev_fraction: 0.5
+sources:
+  - id: cuad-mini-overlap
+    licence: cc-by-4.0
+    path: tests/fixtures/cuad_mini/overlap
+attribution:
+  - "The Atticus Project, CUAD v1, CC BY 4.0"

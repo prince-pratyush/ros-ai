@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from rosai.pack import load_pack
-from rosai.prepare import prepare
+from rosai.prepare import SplitError, prepare
 
 
 def test_prepare_emits_span_or_none_and_carves_dev_from_train():
@@ -22,3 +24,9 @@ def test_prepare_emits_span_or_none_and_carves_dev_from_train():
     assert dev_ids == set(proof.dev_ids)
 
     assert any("CC BY 4.0" in line for line in prepared.attribution)
+
+
+def test_prepare_fails_when_a_document_id_is_in_two_splits():
+    with pytest.raises(SplitError) as exc:
+        prepare(load_pack(Path("tests/fixtures/cuad_mini/overlap/pack.yaml")))
+    assert "contract-a" in str(exc.value)

@@ -10,6 +10,10 @@ _TASK = "clause_span"
 _CATEGORY = "Governing Law"
 
 
+class SplitError(Exception):
+    """A document id was assigned to more than one split."""
+
+
 @dataclass(frozen=True)
 class InstructionPair:
     document_id: str
@@ -68,19 +72,20 @@ def prepare(pack: Pack) -> Prepared:
 
 def _rows(pack: Pack) -> tuple[tuple[str, str, str], ...]:
     found: list[tuple[str, str, str]] = []
+    splits_by_id: dict[str, set[str]] = {}
     for source in pack.sources:
         if not source.path:
             continue
         path = Path(source.path) / "labels.csv"
         with path.open(newline="", encoding="utf-8") as handle:
             for record in csv.DictReader(handle):
-                found.append(
-                    (
-                        record["document_id"].strip(),
-                        record["split"].strip(),
-                        record[_CATEGORY].strip(),
-                    )
-                )
+                document_id = record["document_id"].strip()
+                split = record["split"].strip()
+                seen = splits_by_id.setdefault(document_id, set())
+                seen.add(split)
+                if len(seen) > 1:
+                    raise SplitError(f"{document_id} is in more than one split")
+                found.append((document_id, split, record[_CATEGORY].strip()))
     return tuple(found)
 
 
