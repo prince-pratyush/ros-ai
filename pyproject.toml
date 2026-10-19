@@ -8,6 +8,7 @@ dependencies = ["pyyaml"]
 [project.optional-dependencies]
 dev = ["pytest"]
 mac = ["mlx", "mlx-lm"]
+modal = ["modal"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -2,8 +2,9 @@
 
 from decimal import Decimal
 
-# Base (preemptible) prices from https://modal.com/pricing on 19 Oct 2026.
-# Non-preemptible execution is 3x these prices, so callers stay on the base rate.
+# List prices from https://modal.com/pricing on 19 Oct 2026.
+# GPU functions are preemptible. nonpreemptible is unsupported for them
+# and triples CPU and memory only on CPU functions, so this table stays at list price.
 _GPU_USD_PER_SECOND = {
     "A100-80GB": Decimal("0.000694"),
     "H100": Decimal("0.001097"),
