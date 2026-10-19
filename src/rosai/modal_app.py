@@ -84,6 +84,61 @@ def train(config: str = "configs/modal-lean.yaml") -> TrainPlan:
     return plan_train(config)
 
 
+@dataclass(frozen=True)
+class EvalPlan:
+    gpu: str
+    seconds: int
+    cpu_cores: int
+    memory_gib: int
+    max_usd: float
+    max_gpu_hours: float
+    limit: int | None
+    batch_size: int
+    estimate_usd: float
+    capped: bool
+    volume_name: str
+    model_id: str
+
+
+def plan_eval(path: str | Path) -> EvalPlan:
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    seconds = int(raw["gpu_seconds"])
+    cpu_cores = int(raw["cpu_cores"])
+    memory_gib = int(raw["memory_gib"])
+    gpu = str(raw["gpu"])
+    max_usd = float(raw["max_usd"])
+    max_gpu_hours = float(raw["max_gpu_hours"])
+    usd = guard(
+        gpu=gpu,
+        seconds=seconds,
+        cpu_cores=cpu_cores,
+        memory_gib=memory_gib,
+        max_usd=max_usd,
+        max_gpu_hours=max_gpu_hours,
+    )
+    limit = raw.get("limit")
+    limit_value = None if limit is None else int(limit)
+    return EvalPlan(
+        gpu=gpu,
+        seconds=seconds,
+        cpu_cores=cpu_cores,
+        memory_gib=memory_gib,
+        max_usd=max_usd,
+        max_gpu_hours=max_gpu_hours,
+        limit=limit_value,
+        batch_size=int(raw["batch_size"]),
+        estimate_usd=usd,
+        capped=limit_value is not None,
+        volume_name=str(raw["volume"]),
+        model_id=str(raw["model"]["id"]),
+    )
+
+
+def evaluate(config: str = "configs/modal-eval-lean.yaml") -> EvalPlan:
+    """Print the eval estimate and refuse a ceiling breach. Does not boot a GPU."""
+    return plan_eval(config)
+
+
 def _start_step(checkpoint_dir: str | Path | None) -> int:
     if checkpoint_dir is None:
         return 0
@@ -113,9 +168,29 @@ def _deployed_resources(volume, modal) -> dict:
     }
 
 
+def _eval_resources(volume, modal) -> dict:
+    config = Path("configs/modal-eval-full.yaml")
+    if config.is_file():
+        raw = yaml.safe_load(config.read_text(encoding="utf-8"))
+        gpu = str(raw["gpu"])
+        cpu = int(raw["cpu_cores"])
+        memory = int(raw["memory_gib"]) * 1024
+        timeout = int(raw["gpu_seconds"])
+    else:
+        gpu, cpu, memory, timeout = "A100-80GB", 8, 32768, 1800
+    return {
+        "gpu": gpu,
+        "cpu": cpu,
+        "memory": memory,
+        "timeout": timeout,
+        "volumes": {"/checkpoints": volume},
+        "retries": modal.Retries(initial_delay=0.0, max_retries=3),
+    }
+
+
 def _attach(modal) -> None:
-    """Decorate the remote function only when the Modal SDK is installed."""
-    global train
+    """Decorate the remote functions only when the Modal SDK is installed."""
+    global train, evaluate
     volume = modal.Volume.from_name("rosai-checkpoints", create_if_missing=True)
     image = modal.Image.debian_slim(python_version="3.12").pip_install("pyyaml")
     app = modal.App("rosai-train", image=image)
@@ -134,6 +209,34 @@ def _attach(modal) -> None:
     def train(config: str = "configs/modal-lean.yaml") -> None:
         plan_train(config)
         remote_train.remote(Path(config).read_text(encoding="utf-8"))
+
+    eval_image = modal.Image.debian_slim(python_version="3.12").pip_install(
+        "pyyaml", "vllm"
+    )
+    eval_resources = _eval_resources(volume, modal)
+    eval_resources["image"] = eval_image
+
+    @app.function(**eval_resources)
+    def remote_eval(config_text: str) -> int:
+        destination = Path("/tmp/rosai-eval.yaml")
+        destination.write_text(config_text, encoding="utf-8")
+        plan = plan_eval(destination)
+        prompts_path = Path("/checkpoints/prompts.json")
+        if not prompts_path.is_file():
+            volume.commit()
+            return 0
+        from rosai.eval_batch import VllmEngine, run_batches, write_completions
+
+        prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
+        completions = run_batches(VllmEngine(plan.model_id), prompts, plan.batch_size)
+        write_completions(Path("/checkpoints"), completions)
+        volume.commit()
+        return len(completions)
+
+    @app.local_entrypoint()
+    def evaluate(config: str = "configs/modal-eval-lean.yaml") -> None:
+        plan_eval(config)
+        remote_eval.remote(Path(config).read_text(encoding="utf-8"))
 
 
 try:

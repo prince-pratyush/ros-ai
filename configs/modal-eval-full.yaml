@@ -1,0 +1,11 @@
+model:
+  id: Qwen/Qwen3-8B
+  thinking: false
+gpu: A100-80GB
+cpu_cores: 8
+memory_gib: 32
+gpu_seconds: 1800
+max_usd: 6
+max_gpu_hours: 1
+batch_size: 8
+volume: rosai-checkpoints
