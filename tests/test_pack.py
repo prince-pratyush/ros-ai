@@ -32,6 +32,27 @@ def test_empty_licence_is_refused(tmp_path):
     assert "''" in message
 
 
+def test_cc0_and_apache_licences_pass(tmp_path):
+    for licence in ("cc0-1.0", "apache-2.0"):
+        path = tmp_path / f"{licence}.yaml"
+        path.write_text(
+            f"id: ok\nsources:\n  - id: example/{licence}\n    licence: {licence}\n",
+            encoding="utf-8",
+        )
+        pack = load_pack(path)
+        assert pack.sources[0].licence == licence
+
+
+def test_legal_pack_records_cc_by_and_atticus_attribution():
+    pack = load_pack(Path("packs/legal.yaml"))
+    assert {source.id for source in pack.sources} == {
+        "theatticusproject/cuad",
+        "theatticusproject/cuad-qa",
+    }
+    assert {source.licence for source in pack.sources} == {"cc-by-4.0"}
+    assert any("The Atticus Project" in line for line in pack.attribution)
+
+
 def test_cc_by_nc_pack_is_refused(tmp_path):
     path = tmp_path / "nc.yaml"
     path.write_text(

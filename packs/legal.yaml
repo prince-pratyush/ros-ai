@@ -1,0 +1,8 @@
+id: legal
+sources:
+  - id: theatticusproject/cuad
+    licence: cc-by-4.0
+  - id: theatticusproject/cuad-qa
+    licence: cc-by-4.0
+attribution:
+  - "The Atticus Project, CUAD v1, CC BY 4.0"
