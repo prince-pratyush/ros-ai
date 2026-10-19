@@ -9,6 +9,7 @@ dependencies = ["pyyaml"]
 dev = ["pytest"]
 mac = ["mlx", "mlx-lm"]
 modal = ["modal"]
+langsmith = ["langsmith"]
 
 [build-system]
 requires = ["setuptools>=68"]
