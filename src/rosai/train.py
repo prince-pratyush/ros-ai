@@ -44,7 +44,7 @@ def load_run(path: str | Path) -> Run:
 def train(prepared: Prepared, run: Run, backend, dest: str | Path) -> Manifest:
     destination = Path(dest)
     destination.mkdir(parents=True, exist_ok=True)
-    examples = (*prepared.train, *prepared.dev, *prepared.held_out)
+    examples = prepared.train
     backend.fit(examples, completion_only=run.loss == "completion")
     manifest = Manifest(
         model_id=run.model_id,

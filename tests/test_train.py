@@ -38,3 +38,15 @@ def test_train_writes_a_manifest_for_the_fake_backend(tmp_path):
     assert manifest.loss == written["loss"]
     assert manifest.config_hash == written["config_hash"]
     assert backend.completion_only is True
+
+
+def test_trainer_does_not_receive_held_out_ids(tmp_path):
+    prepared = prepare(load_pack(Path("tests/fixtures/cuad_published/pack.yaml")))
+    backend = _RecordingBackend()
+
+    train(prepared, load_run(Path("configs/fake.yaml")), backend, tmp_path)
+
+    assert set(backend.document_ids) == {
+        "LIMEENERGYCO_09_09_1999-EX-10-DISTRIBUTOR AGREEMENT",
+        "NELNETINC_04_08_2020-EX-1-JOINT FILING AGREEMENT",
+    }
