@@ -1,8 +1,10 @@
 id: legal
+split: published
 sources:
   - id: theatticusproject/cuad
     licence: cc-by-4.0
   - id: theatticusproject/cuad-qa
     licence: cc-by-4.0
+    revision: 6d9a118fb629814c4384a1e63cfc84f5c01894b3
 attribution:
   - "The Atticus Project, CUAD v1, CC BY 4.0"

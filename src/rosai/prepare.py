@@ -11,7 +11,7 @@ _CATEGORY = "Governing Law"
 
 
 class SplitError(Exception):
-    """A document id was assigned to more than one split."""
+    """A document id disagrees with the split it was given."""
 
 
 @dataclass(frozen=True)
@@ -71,6 +71,7 @@ def prepare(pack: Pack) -> Prepared:
 
 
 def _rows(pack: Pack) -> tuple[tuple[str, str, str], ...]:
+    published = _published_assignment() if pack.split == "published" else None
     found: list[tuple[str, str, str]] = []
     splits_by_id: dict[str, set[str]] = {}
     for source in pack.sources:
@@ -81,12 +82,34 @@ def _rows(pack: Pack) -> tuple[tuple[str, str, str], ...]:
             for record in csv.DictReader(handle):
                 document_id = record["document_id"].strip()
                 split = record["split"].strip()
+                _require_published(published, document_id, split)
                 seen = splits_by_id.setdefault(document_id, set())
                 seen.add(split)
                 if len(seen) > 1:
                     raise SplitError(f"{document_id} is in more than one split")
                 found.append((document_id, split, record[_CATEGORY].strip()))
     return tuple(found)
+
+
+def _published_assignment() -> dict[str, str]:
+    path = Path(__file__).with_name("cuad_published_split.csv")
+    assignment: dict[str, str] = {}
+    with path.open(newline="", encoding="utf-8") as handle:
+        for record in csv.DictReader(handle):
+            assignment[record["document_id"].strip()] = record["split"].strip()
+    return assignment
+
+
+def _require_published(
+    published: dict[str, str] | None, document_id: str, split: str
+) -> None:
+    if published is None:
+        return
+    expected = published.get(document_id)
+    if expected != split:
+        raise SplitError(
+            f"{document_id} is labelled {split!r} but the published split is {expected!r}"
+        )
 
 
 def _pair(row: tuple[str, str, str]) -> InstructionPair:

@@ -1,0 +1,9 @@
+id: cuad-published
+split: published
+dev_fraction: 0.5
+sources:
+  - id: cuad-published
+    licence: cc-by-4.0
+    path: tests/fixtures/cuad_published
+attribution:
+  - "The Atticus Project, CUAD v1, CC BY 4.0"

@@ -1,0 +1,8 @@
+id: cuad-published-mislabelled
+split: published
+sources:
+  - id: cuad-published-mislabelled
+    licence: cc-by-4.0
+    path: tests/fixtures/cuad_published_mislabelled
+attribution:
+  - "The Atticus Project, CUAD v1, CC BY 4.0"

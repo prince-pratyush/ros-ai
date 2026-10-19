@@ -17,6 +17,7 @@ class Source:
     id: str
     licence: str
     path: str = ""
+    revision: str = ""
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,7 @@ class Pack:
     sources: tuple[Source, ...]
     attribution: tuple[str, ...]
     dev_fraction: float = 0.1
+    split: str = ""
 
 
 def load_pack(path: str | Path) -> Pack:
@@ -39,6 +41,7 @@ def load_pack(path: str | Path) -> Pack:
         sources=sources,
         attribution=attribution,
         dev_fraction=float(dev_fraction),
+        split=str(raw.get("split") or ""),
     )
 
 
@@ -51,4 +54,9 @@ def _source(item: object) -> Source:
         licence = ""
     if licence not in ALLOWED_LICENCES:
         raise LicenceError(f"{source_id}: licence {licence!r} is not allowed")
-    return Source(id=source_id, licence=licence, path=str(item.get("path") or ""))
+    return Source(
+        id=source_id,
+        licence=licence,
+        path=str(item.get("path") or ""),
+        revision=str(item.get("revision") or ""),
+    )
