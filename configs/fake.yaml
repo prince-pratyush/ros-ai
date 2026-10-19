@@ -1,0 +1,6 @@
+model:
+  id: Qwen/Qwen3-8B
+  thinking: false
+seed: 3407
+loss: completion
+backend: fake
