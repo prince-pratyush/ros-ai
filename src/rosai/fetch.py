@@ -3,12 +3,17 @@
 import hashlib
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 
 from rosai.pack import Source
 
 
 class ChecksumError(Exception):
     """Downloaded bytes did not match the pinned sha256."""
+
+
+class OfflineError(Exception):
+    """A pinned download was requested without ROSAI_DOWNLOAD_CUAD=1."""
 
 
 def download(source: Source, read: Callable[[str], bytes] | None = None) -> bytes:
@@ -20,6 +25,22 @@ def download(source: Source, read: Callable[[str], bytes] | None = None) -> byte
         raise ChecksumError(
             f"{source.id}: sha256 {actual} does not match {source.sha256}"
         )
+    return payload
+
+
+def cached_download(
+    source: Source,
+    cache_dir: str | Path,
+    read: Callable[[str], bytes] | None = None,
+) -> bytes:
+    path = Path(cache_dir) / source.sha256
+    if path.is_file():
+        payload = path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() == source.sha256:
+            return payload
+    payload = download(source, read=read)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
     return payload
 
 

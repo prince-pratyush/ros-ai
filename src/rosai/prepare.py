@@ -1,9 +1,12 @@
 """Turn a local CUAD-shaped pack into clause-span pairs and a dev split."""
 
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from rosai.cuad import clause_rows
+from rosai.fetch import OfflineError, cached_download
 from rosai.pack import Pack
 
 _TASK = "clause_span"
@@ -40,8 +43,14 @@ class Prepared:
     held_out: tuple[InstructionPair, ...]
 
 
-def prepare(pack: Pack) -> Prepared:
-    rows = _rows(pack)
+def prepare(
+    pack: Pack,
+    *,
+    archive: bytes | None = None,
+    cache_dir: str | Path | None = None,
+    read=None,
+) -> Prepared:
+    rows = _rows(pack, archive=archive, cache_dir=cache_dir, read=read)
     train_pool = tuple(sorted(row[0] for row in rows if row[1] == "train"))
     held_out_ids = tuple(sorted(row[0] for row in rows if row[1] == "test"))
     dev_count = int(len(train_pool) * pack.dev_fraction)
@@ -70,14 +79,24 @@ def prepare(pack: Pack) -> Prepared:
     )
 
 
-def _rows(pack: Pack) -> tuple[tuple[str, str, str], ...]:
+def _rows(
+    pack: Pack,
+    *,
+    archive: bytes | None,
+    cache_dir: str | Path | None,
+    read,
+) -> tuple[tuple[str, str, str], ...]:
     published = _published_assignment() if pack.split == "published" else None
     found: list[tuple[str, str, str]] = []
     splits_by_id: dict[str, set[str]] = {}
+    saw_csv = False
     for source in pack.sources:
         if not source.path:
             continue
         path = Path(source.path) / "labels.csv"
+        if not path.is_file():
+            continue
+        saw_csv = True
         with path.open(newline="", encoding="utf-8") as handle:
             for record in csv.DictReader(handle):
                 document_id = record["document_id"].strip()
@@ -88,7 +107,37 @@ def _rows(pack: Pack) -> tuple[tuple[str, str, str], ...]:
                 if len(seen) > 1:
                     raise SplitError(f"{document_id} is in more than one split")
                 found.append((document_id, split, record[_CATEGORY].strip()))
+    if saw_csv:
+        return tuple(found)
+    pinned = any(source.url and source.sha256 for source in pack.sources)
+    if archive is None and not pinned:
+        return ()
+    payload = _archive_bytes(pack, archive, cache_dir, read)
+    for document_id, split, _category, span in clause_rows(payload, (_CATEGORY,)):
+        _require_published(published, document_id, split)
+        seen = splits_by_id.setdefault(document_id, set())
+        seen.add(split)
+        if len(seen) > 1:
+            raise SplitError(f"{document_id} is in more than one split")
+        found.append((document_id, split, span))
     return tuple(found)
+
+
+def _archive_bytes(pack: Pack, archive: bytes | None, cache_dir, read) -> bytes:
+    if archive is not None:
+        return archive
+    source = next(item for item in pack.sources if item.url and item.sha256)
+    directory = Path(cache_dir) if cache_dir is not None else Path(".cache/rosai")
+    cached = directory / source.sha256
+    if (
+        read is None
+        and os.environ.get("ROSAI_DOWNLOAD_CUAD") != "1"
+        and not cached.is_file()
+    ):
+        raise OfflineError(
+            f"{source.id}: set ROSAI_DOWNLOAD_CUAD=1 to download CUAD"
+        )
+    return cached_download(source, directory, read=read)
 
 
 def _published_assignment() -> dict[str, str]:
