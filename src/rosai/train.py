@@ -242,7 +242,7 @@ def on_save_checkpoint(directory: str | Path, step: int, commit) -> None:
 
 
 def fit_qlora(request: QloraRequest, on_checkpoint=None) -> int:
-    """Train a 4-bit QLoRA adapter. unsloth and torch load here, not at import."""
+    """Train a 4-bit QLoRA adapter. unsloth loads here, and it pulls torch with it."""
     from unsloth import FastLanguageModel
     from unsloth.chat_templates import train_on_responses_only
     from datasets import Dataset

@@ -100,7 +100,8 @@ def execute_train(
     from rosai.cuad import load_categories
     from rosai.pack import load_pack
     from rosai.prepare import prepare
-    from rosai.train import Manifest, TrainingError, UnslothBackend, load_run, train
+    from rosai.train import Manifest, TrainingError, UnslothBackend, load_run
+    from rosai.train import train as write_run
 
     destination = Path(checkpoint_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -128,7 +129,7 @@ def execute_train(
         session=session,
         on_checkpoint=on_checkpoint,
     )
-    manifest: Manifest = train(prepared, run, backend, destination)
+    manifest: Manifest = write_run(prepared, run, backend, destination)
     record_checkpoint(destination, backend.step)
     return manifest
 
