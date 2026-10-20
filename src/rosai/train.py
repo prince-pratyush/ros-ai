@@ -207,3 +207,84 @@ def train(prepared: Prepared, run: Run, backend, dest: str | Path) -> Manifest:
         encoding="utf-8",
     )
     return manifest
+
+
+def on_save_checkpoint(directory: str | Path, step: int, commit) -> None:
+    """Record a preemptible step, then commit the volume if a commit hook was given."""
+    from rosai.modal_app import record_checkpoint
+
+    record_checkpoint(directory, step)
+    if commit is not None:
+        commit()
+
+
+def fit_qlora(request: QloraRequest, on_checkpoint=None) -> int:
+    """Train a 4-bit QLoRA adapter. unsloth and torch load here, not at import."""
+    from unsloth import FastLanguageModel
+    from unsloth.chat_templates import train_on_responses_only
+    from datasets import Dataset
+    from transformers import TrainerCallback
+    from trl import SFTConfig, SFTTrainer
+
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=request.model_id,
+        max_seq_length=request.max_seq_length,
+        dtype=None,
+        load_in_4bit=request.load_in_4bit,
+    )
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=request.lora_r,
+        target_modules=list(request.target_modules),
+        lora_alpha=request.lora_alpha,
+        lora_dropout=0,
+        bias="none",
+        use_gradient_checkpointing="unsloth",
+        random_state=request.seed,
+        use_rslora=False,
+        loftq_config=None,
+    )
+    dataset = Dataset.from_dict({"text": list(request.texts)})
+    trainer = SFTTrainer(
+        model=model,
+        processing_class=tokenizer,
+        train_dataset=dataset,
+        args=SFTConfig(
+            output_dir=request.output_dir,
+            max_length=request.max_seq_length,
+            dataset_text_field="text",
+            per_device_train_batch_size=request.batch_size,
+            num_train_epochs=request.epochs,
+            learning_rate=2e-4,
+            logging_steps=1,
+            optim="adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="linear",
+            seed=request.seed,
+            save_strategy="steps",
+            save_steps=request.checkpoint_every,
+            report_to="none",
+            packing=False,
+        ),
+    )
+    if request.completion_only:
+        trainer = train_on_responses_only(
+            trainer,
+            instruction_part="<|im_start|>user\n",
+            response_part="<|im_start|>assistant\n",
+        )
+
+    class _Commit(TrainerCallback):
+        def on_save(self, args, state, control, **kwargs):
+            on_save_checkpoint(
+                Path(request.adapter_dir).parent,
+                int(state.global_step),
+                on_checkpoint,
+            )
+
+    trainer.add_callback(_Commit())
+    stats = trainer.train(resume_from_checkpoint=request.resume_step > 0)
+    Path(request.adapter_dir).mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(request.adapter_dir)
+    tokenizer.save_pretrained(request.adapter_dir)
+    return int(stats.global_step)

@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -130,3 +131,32 @@ def test_fit_fails_when_the_session_does_not_save_the_adapter(tmp_path):
         train(prepared, run, backend, tmp_path)
 
     assert not (tmp_path / "manifest.json").exists()
+
+
+def test_a_checkpoint_save_records_the_step_and_commits(tmp_path):
+    from rosai.train import on_save_checkpoint
+
+    commits: list[str] = []
+    on_save_checkpoint(tmp_path, 50, lambda: commits.append("commit"))
+
+    written = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+    assert written == {"step": 50}
+    assert commits == ["commit"]
+    assert "unsloth" not in sys.modules
+    assert "torch" not in sys.modules
+    assert "modal" not in sys.modules
+
+
+def test_default_backend_imports_unsloth_only_inside_fit(tmp_path):
+    from rosai.train import UnslothBackend, load_run, train
+
+    prepared = prepare(load_pack(Path("tests/fixtures/cuad_mini/pack.yaml")))
+    run = load_run(Path("configs/modal-lean.yaml"))
+    backend = UnslothBackend(run, tmp_path, epochs=1, checkpoint_every=50)
+
+    with pytest.raises(ImportError):
+        train(prepared, run, backend, tmp_path)
+
+    assert not (tmp_path / "manifest.json").exists()
+    assert "unsloth" not in sys.modules
+    assert "torch" not in sys.modules
