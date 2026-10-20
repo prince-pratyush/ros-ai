@@ -25,6 +25,34 @@ class Scorecard:
     traces_sent: int = 0
 
 
+class ScoreError(Exception):
+    """Predictions do not line up with the held-out pairs."""
+
+
+class RecordedAnswers:
+    """Held-out predictions in prepare() order."""
+
+    def __init__(self, rows, name: str = "tuned") -> None:
+        self.name = name
+        self._rows = list(rows)
+
+    def complete(self, pair) -> str:
+        if not self._rows:
+            raise ScoreError("predictions ran out before the held-out pairs did")
+        row = self._rows.pop(0)
+        document_id = str(row["document_id"])
+        if document_id != pair.document_id:
+            raise ScoreError(
+                f"prediction for {document_id} does not match {pair.document_id}"
+            )
+        user = row.get("user")
+        if user is not None and user != pair.messages[0][1]:
+            raise ScoreError(
+                f"{document_id} prediction is for a different contract window"
+            )
+        return str(row["prediction"])
+
+
 def score(
     prepared: Prepared,
     candidates,
