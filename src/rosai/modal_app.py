@@ -299,8 +299,8 @@ def _attach(modal) -> None:
         config: str = "configs/modal-lean.yaml",
         pack: str = "packs/legal.yaml",
     ) -> None:
-        plan_train(config)
-        remote_train.remote(
+        plan = plan_train(config)
+        remote_train.with_options(timeout=plan.seconds).remote(
             Path(config).read_text(encoding="utf-8"),
             Path(pack).read_text(encoding="utf-8"),
         )

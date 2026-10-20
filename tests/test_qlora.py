@@ -518,9 +518,17 @@ class _Remote:
         self.fn = fn
         self.resources = resources
         self.calls: list[tuple] = []
+        self.launch_timeouts: list[int] = []
+
+    def with_options(self, **overrides):
+        bound = _Remote(self.fn, {**self.resources, **overrides})
+        bound.calls = self.calls
+        bound.launch_timeouts = self.launch_timeouts
+        return bound
 
     def remote(self, *args, **kwargs):
         self.calls.append(args)
+        self.launch_timeouts.append(int(self.resources["timeout"]))
         return None
 
 
@@ -604,6 +612,23 @@ def test_remote_train_does_not_commit_a_refused_run(tmp_path, monkeypatch):
     assert fake.volume is not None
     assert fake.volume.commits == 0
     assert not (tmp_path / "vol" / "adapter").exists()
+
+
+def test_entrypoint_stops_a_run_at_the_timeout_in_its_config(tmp_path):
+    import rosai.modal_app as app
+
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    pack = tmp_path / "pack.yaml"
+    pack.write_text("id: local\n", encoding="utf-8")
+    try:
+        app._attach(fake)
+        app.train("configs/modal-lean.yaml", str(pack))
+        app.train("configs/modal-full.yaml", str(pack))
+    finally:
+        app.train, app.evaluate = previous
+
+    assert fake.functions["remote_train"].launch_timeouts == [1200, 10800]
 
 
 def test_entrypoint_sends_the_pack_and_refuses_before_a_remote_call(tmp_path):
