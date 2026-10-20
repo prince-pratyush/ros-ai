@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -251,6 +252,28 @@ def test_execute_train_resumes_from_the_recorded_step(tmp_path):
     }
 
 
+def test_execute_train_refuses_thinking(tmp_path):
+    from rosai.modal_app import execute_train
+    from rosai.train import TrainingError
+
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("thinking: false", "thinking: true")
+    )
+    session = _SavingSession()
+
+    with pytest.raises(TrainingError):
+        execute_train(
+            config,
+            _clause_pack(tmp_path),
+            tmp_path / "volume",
+            session=session,
+        )
+
+    assert session.request is None
+
+
 def test_execute_train_refuses_a_backend_other_than_unsloth(tmp_path):
     from rosai.modal_app import execute_train
     from rosai.train import TrainingError
@@ -271,6 +294,201 @@ def test_execute_train_refuses_a_backend_other_than_unsloth(tmp_path):
         )
 
     assert session.request is None
+
+
+class _Image:
+    def __init__(self) -> None:
+        self.packages: tuple[str, ...] = ()
+        self.sources: tuple[str, ...] = ()
+
+    def pip_install(self, *packages: str):
+        self.packages = packages
+        return self
+
+    def add_local_python_source(self, *names: str):
+        self.sources = names
+        return self
+
+
+class _Volume:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.commits = 0
+
+    def commit(self) -> None:
+        self.commits += 1
+
+
+class _FakeModal:
+    """Stand-in for the Modal SDK. It records the function and does not boot a GPU."""
+
+    def __init__(self) -> None:
+        self.functions: dict = {}
+        self.volume: _Volume | None = None
+        owner = self
+
+        class Image:
+            @staticmethod
+            def debian_slim(python_version: str = "3.12") -> _Image:
+                return _Image()
+
+        class Volume:
+            @staticmethod
+            def from_name(name: str, create_if_missing: bool = False) -> _Volume:
+                owner.volume = _Volume(name)
+                return owner.volume
+
+        class Retries:
+            def __init__(self, initial_delay: float = 0.0, max_retries: int = 0) -> None:
+                self.initial_delay = initial_delay
+                self.max_retries = max_retries
+
+        class App:
+            def __init__(self, name: str, image=None) -> None:
+                self.name = name
+                self.image = image
+
+            def function(self, **resources):
+                def deco(fn):
+                    remote = _Remote(fn, resources)
+                    owner.functions[fn.__name__] = remote
+                    return remote
+
+                return deco
+
+            def local_entrypoint(self):
+                def deco(fn):
+                    return fn
+
+                return deco
+
+        self.Image = Image
+        self.Volume = Volume
+        self.Retries = Retries
+        self.App = App
+
+
+class _Remote:
+    def __init__(self, fn, resources: dict) -> None:
+        self.fn = fn
+        self.resources = resources
+        self.calls: list[tuple] = []
+
+    def remote(self, *args, **kwargs):
+        self.calls.append(args)
+        return None
+
+
+def test_remote_train_saves_the_lora_adapter_and_commits_the_volume(
+    tmp_path, monkeypatch
+):
+    import rosai.modal_app as app
+
+    monkeypatch.setenv("ROSAI_CHECKPOINT_DIR", str(tmp_path / "vol"))
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    try:
+        app._attach(fake)
+        remote = fake.functions["remote_train"]
+        assert remote.resources["gpu"] == "A100-80GB"
+        assert "nonpreemptible" not in remote.resources
+        assert remote.resources["cpu"] == 8
+        assert remote.resources["memory"] == 32768
+        assert remote.resources["timeout"] == 10800
+        assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
+        assert remote.resources["retries"].max_retries == 3
+        assert "unsloth" in remote.resources["image"].packages
+        assert "torch" in remote.resources["image"].packages
+        assert "rosai" in remote.resources["image"].sources
+        session = _SavingSession()
+        count = remote.fn(
+            Path("configs/modal-lean.yaml").read_text(encoding="utf-8"),
+            _clause_pack(tmp_path),
+            session,
+        )
+    finally:
+        app.train, app.evaluate = previous
+
+    assert count == 2
+    assert session.request.texts[0] == _THINKING_OFF
+    assert session.request.texts[1].endswith("Delaware<|im_end|>\n")
+    assert "Acme" not in "".join(session.request.texts)
+    assert "New York" not in "".join(session.request.texts)
+    assert session.request.load_in_4bit is True
+    assert session.request.model_id == "Qwen/Qwen3-8B"
+    volume = tmp_path / "vol"
+    assert (volume / "adapter" / "adapter_model.safetensors").read_bytes() == b"lora"
+    written = json.loads((volume / "manifest.json").read_text(encoding="utf-8"))
+    assert written["example_count"] == 2
+    assert written["backend"] == "unsloth"
+    assert written["thinking"] is False
+    assert fake.volume is not None
+    assert fake.volume.commits == 2
+    assert "ROSAI_DOWNLOAD_CUAD" not in os.environ
+    assert "unsloth" not in sys.modules
+    assert "torch" not in sys.modules
+    assert "modal" not in sys.modules
+
+
+def test_remote_train_does_not_commit_a_refused_run(tmp_path, monkeypatch):
+    import rosai.modal_app as app
+    from rosai.cost import CostCeilingError
+
+    monkeypatch.setenv("ROSAI_CHECKPOINT_DIR", str(tmp_path / "vol"))
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("gpu_seconds: 1200", "gpu_seconds: 3600")
+    )
+    session = _SavingSession()
+    try:
+        app._attach(fake)
+        with pytest.raises(CostCeilingError):
+            fake.functions["remote_train"].fn(
+                config, _clause_pack(tmp_path), session
+            )
+    finally:
+        app.train, app.evaluate = previous
+
+    assert session.request is None
+    assert fake.volume is not None
+    assert fake.volume.commits == 0
+    assert not (tmp_path / "vol" / "adapter").exists()
+
+
+def test_entrypoint_sends_the_pack_and_refuses_before_a_remote_call(tmp_path):
+    import rosai.modal_app as app
+    from rosai.cost import CostCeilingError
+
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    pack = tmp_path / "pack.yaml"
+    pack.write_text("id: local\n", encoding="utf-8")
+    try:
+        app._attach(fake)
+        app.train("configs/modal-lean.yaml", str(pack))
+        sent = fake.functions["remote_train"].calls
+        assert sent == [
+            (
+                Path("configs/modal-lean.yaml").read_text(encoding="utf-8"),
+                "id: local\n",
+            )
+        ]
+        refused = tmp_path / "refused.yaml"
+        refused.write_text(
+            Path("configs/modal-lean.yaml")
+            .read_text(encoding="utf-8")
+            .replace("gpu_seconds: 1200", "gpu_seconds: 3600"),
+            encoding="utf-8",
+        )
+        with pytest.raises(CostCeilingError):
+            app.train(str(refused), str(pack))
+    finally:
+        app.train, app.evaluate = previous
+
+    assert len(fake.functions["remote_train"].calls) == 1
 
 
 def test_default_backend_imports_unsloth_only_inside_fit(tmp_path):

@@ -1,6 +1,7 @@
 """Preemptible Modal train plan. The GPU stays off until modal run."""
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -236,6 +237,28 @@ def _eval_resources(volume, modal) -> dict:
     }
 
 
+# Installed on the GPU image only. Importing this module does not import them.
+_TRAIN_PACKAGES = (
+    "pyyaml",
+    "torch",
+    "unsloth",
+    "trl",
+    "transformers",
+    "datasets",
+    "peft",
+    "bitsandbytes",
+    "accelerate",
+)
+
+
+def _train_image(modal):
+    return (
+        modal.Image.debian_slim(python_version="3.12")
+        .pip_install(*_TRAIN_PACKAGES)
+        .add_local_python_source("rosai")
+    )
+
+
 def _attach(modal) -> None:
     """Decorate the remote functions only when the Modal SDK is installed."""
     global train, evaluate
@@ -243,20 +266,39 @@ def _attach(modal) -> None:
     image = modal.Image.debian_slim(python_version="3.12").pip_install("pyyaml")
     app = modal.App("rosai-train", image=image)
     resources = _deployed_resources(volume, modal)
+    resources["image"] = _train_image(modal)
 
     @app.function(**resources)
-    def remote_train(config_text: str) -> int:
-        destination = Path("/tmp/rosai-run.yaml")
-        destination.write_text(config_text, encoding="utf-8")
-        plan = plan_train(destination, checkpoint_dir=Path("/checkpoints"))
-        record_checkpoint(Path("/checkpoints"), plan.start_step)
+    def remote_train(config_text: str, pack_text: str, session=None) -> int:
+        root = Path(os.environ.get("ROSAI_CHECKPOINT_DIR", "/checkpoints"))
+        previous = os.environ.get("ROSAI_DOWNLOAD_CUAD")
+        os.environ["ROSAI_DOWNLOAD_CUAD"] = "1"
+        try:
+            manifest = execute_train(
+                config_text,
+                pack_text,
+                root,
+                session=session,
+                on_checkpoint=volume.commit,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("ROSAI_DOWNLOAD_CUAD", None)
+            else:
+                os.environ["ROSAI_DOWNLOAD_CUAD"] = previous
         volume.commit()
-        return plan.start_step
+        return manifest.example_count
 
     @app.local_entrypoint()
-    def train(config: str = "configs/modal-lean.yaml") -> None:
+    def train(
+        config: str = "configs/modal-lean.yaml",
+        pack: str = "packs/legal.yaml",
+    ) -> None:
         plan_train(config)
-        remote_train.remote(Path(config).read_text(encoding="utf-8"))
+        remote_train.remote(
+            Path(config).read_text(encoding="utf-8"),
+            Path(pack).read_text(encoding="utf-8"),
+        )
 
     eval_image = modal.Image.debian_slim(python_version="3.12").pip_install(
         "pyyaml", "vllm"
