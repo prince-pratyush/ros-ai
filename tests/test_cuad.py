@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from rosai.cuad import CategoryError
 from rosai.fetch import OfflineError, cached_download
@@ -42,6 +43,15 @@ def test_cache_reuses_matching_bytes_and_replaces_a_bad_file(tmp_path):
     assert cached_download(source, tmp_path, read=read) == payload
     assert calls["n"] == 2
     assert (tmp_path / digest).read_bytes() == payload
+
+
+def test_lean_configs_list_governing_law():
+    from rosai.cuad import load_categories
+
+    for name in ("configs/modal-lean.yaml", "configs/modal-eval-lean.yaml"):
+        raw = yaml.safe_load(Path(name).read_text(encoding="utf-8"))
+        assert raw["categories"] == ["Governing Law"]
+        assert load_categories(name) == ("Governing Law",)
 
 
 def test_prepare_quotes_the_requested_category(tmp_path):

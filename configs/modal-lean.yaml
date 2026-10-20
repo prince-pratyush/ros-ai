@@ -16,3 +16,5 @@ epochs: 1
 batch_size: 1
 checkpoint_every: 50
 volume: rosai-checkpoints
+categories:
+  - Governing Law

@@ -4,6 +4,9 @@ import json
 import re
 import zipfile
 from io import BytesIO
+from pathlib import Path
+
+import yaml
 
 _CATEGORY = re.compile(r'related to "([^"]+)"')
 
@@ -55,6 +58,20 @@ CUAD_CATEGORIES: tuple[str, ...] = (
 
 class CategoryError(Exception):
     """A pack named a clause category the archive does not contain."""
+
+
+def load_categories(path: str | Path) -> tuple[str, ...]:
+    """Clause categories a run config names. Absent means Governing Law."""
+    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    listed = raw.get("categories") if isinstance(raw, dict) else None
+    if not listed:
+        return ("Governing Law",)
+    names = tuple(str(item) for item in listed)
+    known = set(CUAD_CATEGORIES)
+    for name in names:
+        if name not in known:
+            raise CategoryError(f"{name} is not a CUAD category")
+    return names
 
 
 def clause_rows(

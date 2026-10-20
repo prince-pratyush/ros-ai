@@ -10,3 +10,5 @@ max_gpu_hours: 1
 limit: 32
 batch_size: 8
 volume: rosai-checkpoints
+categories:
+  - Governing Law
