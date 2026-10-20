@@ -18,6 +18,7 @@ class TrainPlan:
     memory_gib: int
     max_usd: float
     max_gpu_hours: float
+    retries: int
     limit: int | None
     epochs: int
     estimate_usd: float
@@ -36,6 +37,7 @@ def plan_train(
     gpu = str(raw["gpu"])
     max_usd = float(raw["max_usd"])
     max_gpu_hours = float(raw["max_gpu_hours"])
+    retries = _retry_count(raw)
     usd = guard(
         gpu=gpu,
         seconds=seconds,
@@ -43,6 +45,7 @@ def plan_train(
         memory_gib=memory_gib,
         max_usd=max_usd,
         max_gpu_hours=max_gpu_hours,
+        retries=retries,
     )
     limit = raw.get("limit")
     return TrainPlan(
@@ -52,6 +55,7 @@ def plan_train(
         memory_gib=memory_gib,
         max_usd=max_usd,
         max_gpu_hours=max_gpu_hours,
+        retries=retries,
         limit=None if limit is None else int(limit),
         epochs=int(raw["epochs"]),
         estimate_usd=usd,
@@ -67,6 +71,7 @@ def function_spec(plan: TrainPlan) -> dict:
         "cpu": plan.cpu_cores,
         "memory": plan.memory_gib * 1024,
         "timeout": plan.seconds,
+        "retries": plan.retries,
         "volumes": {"/checkpoints": plan.volume_name},
     }
 
@@ -143,6 +148,7 @@ class EvalPlan:
     memory_gib: int
     max_usd: float
     max_gpu_hours: float
+    retries: int
     limit: int | None
     batch_size: int
     estimate_usd: float
@@ -159,6 +165,7 @@ def plan_eval(path: str | Path) -> EvalPlan:
     gpu = str(raw["gpu"])
     max_usd = float(raw["max_usd"])
     max_gpu_hours = float(raw["max_gpu_hours"])
+    retries = _retry_count(raw)
     usd = guard(
         gpu=gpu,
         seconds=seconds,
@@ -166,6 +173,7 @@ def plan_eval(path: str | Path) -> EvalPlan:
         memory_gib=memory_gib,
         max_usd=max_usd,
         max_gpu_hours=max_gpu_hours,
+        retries=retries,
     )
     limit = raw.get("limit")
     limit_value = None if limit is None else int(limit)
@@ -176,6 +184,7 @@ def plan_eval(path: str | Path) -> EvalPlan:
         memory_gib=memory_gib,
         max_usd=max_usd,
         max_gpu_hours=max_gpu_hours,
+        retries=retries,
         limit=limit_value,
         batch_size=int(raw["batch_size"]),
         estimate_usd=usd,
@@ -255,6 +264,11 @@ def execute_eval(
     return len(rows)
 
 
+def _retry_count(raw: dict) -> int:
+    """Retries after the first attempt. Omitted means one, the lean default."""
+    return int(raw.get("retries", 1))
+
+
 def _start_step(checkpoint_dir: str | Path | None) -> int:
     if checkpoint_dir is None:
         return 0
@@ -272,8 +286,9 @@ def _deployed_resources(volume, modal) -> dict:
         cpu = int(raw["cpu_cores"])
         memory = int(raw["memory_gib"]) * 1024
         timeout = int(raw["gpu_seconds"])
+        retries = _retry_count(raw)
     else:
-        gpu, cpu, memory, timeout = "A100-80GB", 8, 32768, 10800
+        gpu, cpu, memory, timeout, retries = "A100-80GB", 8, 32768, 10800, 1
     return {
         "gpu": gpu,
         "cpu": cpu,
@@ -281,7 +296,7 @@ def _deployed_resources(volume, modal) -> dict:
         "timeout": timeout,
         "volumes": {"/checkpoints": volume},
         "secrets": [modal.Secret.from_name("huggingface")],
-        "retries": modal.Retries(initial_delay=0.0, max_retries=3),
+        "retries": modal.Retries(initial_delay=0.0, max_retries=retries),
     }
 
 
@@ -293,8 +308,9 @@ def _eval_resources(volume, modal) -> dict:
         cpu = int(raw["cpu_cores"])
         memory = int(raw["memory_gib"]) * 1024
         timeout = int(raw["gpu_seconds"])
+        retries = _retry_count(raw)
     else:
-        gpu, cpu, memory, timeout = "A100-80GB", 8, 32768, 1800
+        gpu, cpu, memory, timeout, retries = "A100-80GB", 8, 32768, 1800, 1
     return {
         "gpu": gpu,
         "cpu": cpu,
@@ -302,7 +318,7 @@ def _eval_resources(volume, modal) -> dict:
         "timeout": timeout,
         "volumes": {"/checkpoints": volume},
         "secrets": [modal.Secret.from_name("huggingface")],
-        "retries": modal.Retries(initial_delay=0.0, max_retries=3),
+        "retries": modal.Retries(initial_delay=0.0, max_retries=retries),
     }
 
 
@@ -367,7 +383,10 @@ def _attach(modal) -> None:
         pack: str = "packs/legal.yaml",
     ) -> None:
         plan = plan_train(config)
-        remote_train.with_options(timeout=plan.seconds).remote(
+        remote_train.with_options(
+            timeout=plan.seconds,
+            retries=modal.Retries(initial_delay=0.0, max_retries=plan.retries),
+        ).remote(
             Path(config).read_text(encoding="utf-8"),
             Path(pack).read_text(encoding="utf-8"),
         )
@@ -407,7 +426,10 @@ def _attach(modal) -> None:
         pack: str = "packs/legal.yaml",
     ) -> None:
         plan = plan_eval(config)
-        remote_eval.with_options(timeout=plan.seconds).remote(
+        remote_eval.with_options(
+            timeout=plan.seconds,
+            retries=modal.Retries(initial_delay=0.0, max_retries=plan.retries),
+        ).remote(
             Path(config).read_text(encoding="utf-8"),
             Path(pack).read_text(encoding="utf-8"),
         )

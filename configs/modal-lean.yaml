@@ -11,6 +11,7 @@ memory_gib: 32
 gpu_seconds: 1200
 max_usd: 3
 max_gpu_hours: 1
+retries: 1
 limit: 256
 epochs: 1
 batch_size: 1

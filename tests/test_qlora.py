@@ -310,7 +310,7 @@ def test_execute_train_fits_the_named_category_under_the_cost_guard(tmp_path, ca
         "step": 4
     }
     assert commits == [1]
-    assert "1.043808" in capsys.readouterr().out
+    assert "2.087616" in capsys.readouterr().out
     assert "unsloth" not in sys.modules
     assert "torch" not in sys.modules
 
@@ -528,16 +528,19 @@ class _Remote:
         self.resources = resources
         self.calls: list[tuple] = []
         self.launch_timeouts: list[int] = []
+        self.launch_retries: list[int] = []
 
     def with_options(self, **overrides):
         bound = _Remote(self.fn, {**self.resources, **overrides})
         bound.calls = self.calls
         bound.launch_timeouts = self.launch_timeouts
+        bound.launch_retries = self.launch_retries
         return bound
 
     def remote(self, *args, **kwargs):
         self.calls.append(args)
         self.launch_timeouts.append(int(self.resources["timeout"]))
+        self.launch_retries.append(int(self.resources["retries"].max_retries))
         return None
 
 
@@ -558,7 +561,7 @@ def test_remote_train_saves_the_lora_adapter_and_commits_the_volume(
         assert remote.resources["memory"] == 32768
         assert remote.resources["timeout"] == 10800
         assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
-        assert remote.resources["retries"].max_retries == 3
+        assert remote.resources["retries"].max_retries == 0
         assert remote.resources["secrets"][0].name == "huggingface"
         assert app.app.name == "rosai-train"
         image = remote.resources["image"]
@@ -667,6 +670,7 @@ def test_remote_eval_writes_held_out_predictions_and_commits(tmp_path, monkeypat
         assert remote.resources["cpu"] == 8
         assert remote.resources["memory"] == 32768
         assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
+        assert remote.resources["retries"].max_retries == 0
         assert remote.resources["secrets"][0].name == "huggingface"
         image = remote.resources["image"]
         assert "vllm" in image.packages
@@ -740,6 +744,7 @@ def test_eval_entrypoint_stops_at_the_timeout_in_its_config(tmp_path):
         app.train, app.evaluate = previous
 
     assert fake.functions["remote_eval"].launch_timeouts == [600, 1800]
+    assert fake.functions["remote_eval"].launch_retries == [1, 0]
     assert sent[0] == (
         Path("configs/modal-eval-lean.yaml").read_text(encoding="utf-8"),
         "id: local\n",
@@ -764,6 +769,7 @@ def test_entrypoint_stops_a_run_at_the_timeout_in_its_config(tmp_path):
         app.train, app.evaluate = previous
 
     assert fake.functions["remote_train"].launch_timeouts == [1200, 10800]
+    assert fake.functions["remote_train"].launch_retries == [1, 0]
 
 
 def test_entrypoint_sends_the_pack_and_refuses_before_a_remote_call(tmp_path):

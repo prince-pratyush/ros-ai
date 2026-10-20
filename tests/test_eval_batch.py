@@ -9,7 +9,8 @@ from rosai.prepare import InstructionPair, Prepared, SplitProof
 
 # 600s and 1800s on preemptible A100-80GB, 8 cores, 32 GiB.
 # Hand sums of the 19 Oct 2026 list prices.
-LEAN_ESTIMATE = 0.521904
+# Lean eval asks for one retry, so the guard prices two attempts.
+LEAN_ESTIMATE = 1.043808
 FULL_ESTIMATE = 1.565712
 
 # Two of the four answers match the gold span. 2 / 4 = 0.5.
@@ -92,7 +93,7 @@ def test_execute_eval_writes_one_limited_window_and_strips_the_end_token(
         }
     ]
     assert "B" * 16 not in prompt
-    assert "0.521904" in capsys.readouterr().out
+    assert "1.043808" in capsys.readouterr().out
 
 
 class _RecordingEngine:
@@ -293,17 +294,32 @@ def test_lean_eval_is_capped_and_full_eval_is_not(capsys):
     assert lean.limit == 32
     assert lean.capped is True
     assert lean.max_usd == 6
+    assert lean.retries == 1
     assert lean.estimate_usd == LEAN_ESTIMATE
     full = plan_eval("configs/modal-eval-full.yaml")
     assert full.limit is None
     assert full.capped is False
+    assert full.retries == 0
     assert full.estimate_usd == FULL_ESTIMATE
     spec = function_spec(full)
     assert "nonpreemptible" not in spec
     assert spec["timeout"] == 1800
+    assert spec["retries"] == 0
     printed = capsys.readouterr().out
-    assert "0.521904" in printed
+    assert "1.043808" in printed
     assert "1.565712" in printed
+
+
+def test_eleven_retries_on_a_lean_eval_exceed_its_ceiling(tmp_path):
+    from rosai.modal_app import plan_eval
+
+    text = Path("configs/modal-eval-lean.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "preempt.yaml"
+    path.write_text(text.replace("retries: 1", "retries: 11"), encoding="utf-8")
+    with pytest.raises(CostCeilingError) as exc:
+        plan_eval(path)
+    # 12 * 600 * (0.000694 + 8 * 0.0000131 + 32 * 0.00000222)
+    assert "6.262848" in str(exc.value)
 
 
 def test_eval_over_six_dollars_is_refused(tmp_path):

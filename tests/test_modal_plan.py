@@ -5,8 +5,9 @@ import pytest
 
 from rosai.cost import CostCeilingError
 
-# 1200s preemptible A100-80GB, 8 cores, 32 GiB. Hand sum of the 19 Oct 2026 rates.
-LEAN_ESTIMATE = 1.043808
+# Two attempts (retries: 1) of 1200s preemptible A100-80GB, 8 cores, 32 GiB.
+# Hand sum of the 19 Oct 2026 rates.
+LEAN_ESTIMATE = 2.087616
 # 10800s, same machine.
 FULL_ESTIMATE = 9.394272
 _BANNED = ("token", "secret", "password", "api_key", "sk-")
@@ -19,10 +20,11 @@ def test_lean_config_is_capped_and_under_three_dollars(capsys):
     assert plan.limit == 256
     assert plan.max_usd == 3
     assert plan.epochs == 1
+    assert plan.retries == 1
     assert plan.estimate_usd == LEAN_ESTIMATE
     assert plan.gpu == "A100-80GB"
     assert plan.volume_name == "rosai-checkpoints"
-    assert "1.043808" in capsys.readouterr().out
+    assert "2.087616" in capsys.readouterr().out
 
 
 def test_full_config_is_one_uncapped_epoch_under_twelve_dollars(capsys):
@@ -33,6 +35,7 @@ def test_full_config_is_one_uncapped_epoch_under_twelve_dollars(capsys):
     assert plan.epochs == 1
     assert plan.max_usd == 12
     assert plan.max_gpu_hours == 3
+    assert plan.retries == 0
     assert plan.estimate_usd == FULL_ESTIMATE
     assert plan.checkpoint_every == 50
     spec = function_spec(plan)
@@ -41,6 +44,7 @@ def test_full_config_is_one_uncapped_epoch_under_twelve_dollars(capsys):
     assert spec["cpu"] == 8
     assert spec["memory"] == 32768
     assert spec["timeout"] == 10800
+    assert spec["retries"] == 0
     assert spec["volumes"] == {"/checkpoints": "rosai-checkpoints"}
     assert "9.394272" in capsys.readouterr().out
 
@@ -52,6 +56,29 @@ def test_resume_starts_at_the_recorded_checkpoint_step(tmp_path):
     record_checkpoint(tmp_path, 120)
     resumed = plan_train("configs/modal-full.yaml", checkpoint_dir=tmp_path)
     assert resumed.start_step == 120
+
+
+def test_a_lean_train_without_retries_still_prices_one_retry(tmp_path):
+    from rosai.modal_app import plan_train
+
+    text = Path("configs/modal-lean.yaml").read_text(encoding="utf-8")
+    text = text.replace("retries: 1\n", "")
+    path = tmp_path / "default.yaml"
+    path.write_text(text, encoding="utf-8")
+    plan = plan_train(path)
+    assert plan.retries == 1
+    assert plan.estimate_usd == LEAN_ESTIMATE
+
+
+def test_three_retries_on_a_lean_train_exceed_its_ceiling(tmp_path):
+    from rosai.modal_app import plan_train
+
+    text = Path("configs/modal-lean.yaml").read_text(encoding="utf-8")
+    path = tmp_path / "preempt.yaml"
+    path.write_text(text.replace("retries: 1", "retries: 3"), encoding="utf-8")
+    with pytest.raises(CostCeilingError) as exc:
+        plan_train(path)
+    assert "4.175232" in str(exc.value)
 
 
 def test_full_shape_on_h100_is_refused(tmp_path):

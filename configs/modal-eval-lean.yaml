@@ -8,6 +8,7 @@ memory_gib: 32
 gpu_seconds: 600
 max_usd: 6
 max_gpu_hours: 1
+retries: 1
 limit: 32
 batch_size: 8
 volume: rosai-checkpoints
