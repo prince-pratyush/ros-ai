@@ -124,9 +124,14 @@ def _rows(
                 seen.add(split)
                 if len(seen) > 1:
                     raise SplitError(f"{document_id} is in more than one split")
-                found.append(
-                    (document_id, split, _CATEGORY, record[_CATEGORY].strip())
-                )
+                for category in categories:
+                    if category not in record:
+                        raise CategoryError(
+                            f"{category} is not a category in {path}"
+                        )
+                    found.append(
+                        (document_id, split, category, record[category].strip())
+                    )
     if saw_csv:
         return tuple(found)
     pinned = any(source.url and source.sha256 for source in pack.sources)
