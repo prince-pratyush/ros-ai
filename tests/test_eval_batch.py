@@ -49,6 +49,227 @@ def _prepared() -> Prepared:
     )
 
 
+def test_execute_eval_writes_one_limited_window_and_strips_the_end_token(
+    tmp_path, capsys
+):
+    from rosai.modal_app import execute_eval
+
+    context = ("A" * 16) + ("B" * 16)
+    payload = _held_out_archive("contract-c", context, span=("B" * 16, 16))
+    config = (
+        Path("configs/modal-eval-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("max_seq_length: 2048", "max_seq_length: 40")
+        .replace("limit: 32", "limit: 1")
+    )
+    engine = _RecordingEngine("guess<|im_end|>\n")
+
+    count = execute_eval(
+        config,
+        "id: mini\ndev_fraction: 0\n",
+        tmp_path / "volume",
+        archive=payload,
+        engine=engine,
+    )
+
+    question = "Quote the Governing Law clause or answer none."
+    prompt = (
+        "<|im_start|>user\n"
+        f"{'A' * 16}\n\n{question}<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+    )
+    assert count == 1
+    assert engine.batches == [[prompt]]
+    written = json.loads(
+        (tmp_path / "volume" / "predictions.json").read_text(encoding="utf-8")
+    )
+    assert written == [
+        {
+            "document_id": "contract-c",
+            "user": f"{'A' * 16}\n\n{question}",
+            "prediction": "guess",
+        }
+    ]
+    assert "B" * 16 not in prompt
+    assert "0.521904" in capsys.readouterr().out
+
+
+class _RecordingEngine:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.batches: list[list[str]] = []
+
+    def generate(self, batch: list[str]) -> list[str]:
+        self.batches.append(list(batch))
+        return [self.text for _ in batch]
+
+
+def _held_out_archive(title: str, context: str, *, span: tuple[str, int]) -> bytes:
+    import io
+    import zipfile
+
+    text, start = span
+    item = {
+        "title": title,
+        "paragraphs": [
+            {
+                "context": context,
+                "qas": [
+                    {
+                        "id": f"{title}__Governing Law_0",
+                        "question": (
+                            "Highlight the parts (if any) of this contract related to "
+                            '"Governing Law" that should be reviewed by a lawyer.'
+                        ),
+                        "answers": [{"text": text, "answer_start": start}],
+                        "is_impossible": False,
+                    }
+                ],
+            }
+        ],
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "train_separate_questions.json",
+            json.dumps({"version": "1", "data": []}),
+        )
+        archive.writestr(
+            "test.json", json.dumps({"version": "1", "data": [item]})
+        )
+    return buffer.getvalue()
+
+
+def test_execute_eval_without_a_limit_keeps_every_held_out_window(tmp_path):
+    from rosai.modal_app import execute_eval
+
+    config = (
+        Path("configs/modal-eval-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("limit: 32\n", "")
+        .replace("max_seq_length: 2048", "max_seq_length: 40")
+        .replace("batch_size: 8", "batch_size: 1")
+    )
+    engine = _RecordingEngine("kept")
+
+    count = execute_eval(
+        config,
+        "id: mini\ndev_fraction: 0\n",
+        tmp_path / "volume",
+        archive=_held_out_archive(
+            "contract-c", ("A" * 16) + ("B" * 16), span=("B" * 16, 16)
+        ),
+        engine=engine,
+    )
+
+    assert count == 2
+    assert [len(batch) for batch in engine.batches] == [1, 1]
+    written = json.loads(
+        (tmp_path / "volume" / "predictions.json").read_text(encoding="utf-8")
+    )
+    assert [row["user"][:16] for row in written] == ["A" * 16, "B" * 16]
+    assert [row["prediction"] for row in written] == ["kept", "kept"]
+
+
+def test_execute_eval_refuses_a_ceiling_breach_before_generation(tmp_path):
+    from rosai.cost import CostCeilingError
+    from rosai.modal_app import execute_eval
+
+    config = (
+        Path("configs/modal-eval-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("gpu_seconds: 600", "gpu_seconds: 10800")
+    )
+    engine = _RecordingEngine("nope")
+
+    with pytest.raises(CostCeilingError):
+        execute_eval(
+            config,
+            "id: mini\ndev_fraction: 0\n",
+            tmp_path / "volume",
+            archive=b"not-read",
+            engine=engine,
+        )
+
+    assert engine.batches == []
+    assert not (tmp_path / "volume" / "predictions.json").exists()
+
+
+def test_execute_eval_refuses_a_missing_adapter_without_importing_vllm(tmp_path):
+    import sys
+
+    from rosai.modal_app import EvalError, execute_eval
+
+    with pytest.raises(EvalError) as exc:
+        execute_eval(
+            Path("configs/modal-eval-lean.yaml").read_text(encoding="utf-8"),
+            "id: mini\ndev_fraction: 0\n",
+            tmp_path / "volume",
+            archive=_held_out_archive("contract-c", "Nevada", span=("Nevada", 0)),
+        )
+
+    assert "adapter" in str(exc.value)
+    assert "vllm" not in sys.modules
+
+
+def test_vllm_engine_loads_qwen3_with_the_saved_adapter(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from rosai.eval_batch import VllmEngine
+
+    adapter = tmp_path / "adapter"
+    adapter.mkdir()
+    (adapter / "adapter_config.json").write_text('{"r": 8}\n', encoding="utf-8")
+    seen: dict = {}
+
+    class _SamplingParams:
+        def __init__(self, *, temperature: float, max_tokens: int) -> None:
+            seen["temperature"] = temperature
+            seen["max_tokens"] = max_tokens
+
+    class _LLM:
+        def __init__(self, **kwargs) -> None:
+            seen["llm"] = kwargs
+
+        def generate(self, batch, sampling_params=None, lora_request=None):
+            seen["batch"] = list(batch)
+            seen["lora_path"] = lora_request.path
+            return [_Request("Nevada<|im_end|>")]
+
+    class _Request:
+        def __init__(self, text: str) -> None:
+            self.outputs = [types.SimpleNamespace(text=text)]
+
+    class _LoRARequest:
+        def __init__(self, name: str, lora_int_id: int, path: str) -> None:
+            self.name = name
+            self.path = path
+
+    vllm = types.ModuleType("vllm")
+    vllm.LLM = _LLM
+    vllm.SamplingParams = _SamplingParams
+    lora_pkg = types.ModuleType("vllm.lora")
+    lora_request = types.ModuleType("vllm.lora.request")
+    lora_request.LoRARequest = _LoRARequest
+    monkeypatch.setitem(sys.modules, "vllm", vllm)
+    monkeypatch.setitem(sys.modules, "vllm.lora", lora_pkg)
+    monkeypatch.setitem(sys.modules, "vllm.lora.request", lora_request)
+
+    engine = VllmEngine("Qwen/Qwen3-8B", adapter_dir=str(adapter))
+    assert engine.generate(["prompt"]) == ["Nevada<|im_end|>"]
+    assert seen["llm"] == {
+        "model": "Qwen/Qwen3-8B",
+        "enable_lora": True,
+        "max_lora_rank": 8,
+    }
+    assert seen["temperature"] == 0
+    assert seen["max_tokens"] == 1024
+    assert seen["lora_path"] == str(adapter)
+    assert seen["batch"] == ["prompt"]
+
+
 def test_fake_engine_batches_prompts_and_scorecard_matches_exact_count(tmp_path):
     engine = _FakeEngine()
     dest = tmp_path / "run"

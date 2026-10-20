@@ -1,6 +1,7 @@
 model:
   id: Qwen/Qwen3-8B
   thinking: false
+  max_seq_length: 2048
 gpu: A100-80GB
 cpu_cores: 8
 memory_gib: 32

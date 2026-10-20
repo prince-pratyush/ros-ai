@@ -190,6 +190,71 @@ def evaluate(config: str = "configs/modal-eval-lean.yaml") -> EvalPlan:
     return plan_eval(config)
 
 
+class EvalError(Exception):
+    """Held-out generation cannot run as configured."""
+
+
+def execute_eval(
+    config_text: str,
+    pack_text: str,
+    checkpoint_dir: str | Path,
+    *,
+    archive: bytes | None = None,
+    engine=None,
+) -> int:
+    """Guard the ceiling, generate held-out answers, and write predictions."""
+    import tempfile
+
+    from rosai.cuad import load_categories
+    from rosai.eval_batch import clean_answer, run_batches, write_predictions
+    from rosai.pack import load_pack
+    from rosai.prepare import prepare
+    from rosai.train import TrainingError, format_prompt
+
+    destination = Path(checkpoint_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "run.yaml"
+        config_path.write_text(config_text, encoding="utf-8")
+        plan = plan_eval(config_path)
+        raw = yaml.safe_load(config_text)
+        model = raw["model"]
+        if bool(model["thinking"]):
+            raise TrainingError("Qwen3 QLoRA keeps thinking off")
+        max_seq_length = int(model.get("max_seq_length", 2048))
+        categories = load_categories(config_path)
+        pack_path = Path(tmp) / "pack.yaml"
+        pack_path.write_text(pack_text, encoding="utf-8")
+        prepared = prepare(
+            load_pack(pack_path),
+            archive=archive,
+            categories=categories,
+            max_seq_length=max_seq_length,
+        )
+    examples = prepared.held_out
+    if plan.limit is not None:
+        examples = examples[: plan.limit]
+    prompts = [format_prompt(pair, thinking=False) for pair in examples]
+    if engine is None:
+        adapter_dir = destination / "adapter"
+        if not (adapter_dir / "adapter_model.safetensors").is_file():
+            raise EvalError(f"no LoRA adapter in {adapter_dir}")
+        from rosai.eval_batch import VllmEngine
+
+        engine = VllmEngine(plan.model_id, adapter_dir=str(adapter_dir))
+    completions = run_batches(engine, prompts, plan.batch_size)
+    rows = [
+        {
+            "document_id": pair.document_id,
+            "user": pair.messages[0][1],
+            "prediction": clean_answer(prediction),
+        }
+        for pair, prediction in zip(examples, completions, strict=True)
+    ]
+    write_predictions(destination, rows)
+    return len(rows)
+
+
 def _start_step(checkpoint_dir: str | Path | None) -> int:
     if checkpoint_dir is None:
         return 0
@@ -305,33 +370,45 @@ def _attach(modal) -> None:
             Path(pack).read_text(encoding="utf-8"),
         )
 
-    eval_image = modal.Image.debian_slim(python_version="3.12").pip_install(
-        "pyyaml", "vllm"
+    eval_image = (
+        modal.Image.debian_slim(python_version="3.12")
+        .pip_install("pyyaml", "vllm")
+        .env({"HF_HOME": "/checkpoints/hf"})
+        .add_local_python_source("rosai")
     )
     eval_resources = _eval_resources(volume, modal)
     eval_resources["image"] = eval_image
 
     @app.function(**eval_resources)
-    def remote_eval(config_text: str) -> int:
-        destination = Path("/tmp/rosai-eval.yaml")
-        destination.write_text(config_text, encoding="utf-8")
-        plan = plan_eval(destination)
-        prompts_path = Path("/checkpoints/prompts.json")
-        if not prompts_path.is_file():
-            volume.commit()
-            return 0
-        from rosai.eval_batch import VllmEngine, run_batches, write_completions
-
-        prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
-        completions = run_batches(VllmEngine(plan.model_id), prompts, plan.batch_size)
-        write_completions(Path("/checkpoints"), completions)
+    def remote_eval(config_text: str, pack_text: str, engine=None) -> int:
+        root = Path(os.environ.get("ROSAI_CHECKPOINT_DIR", "/checkpoints"))
+        previous = os.environ.get("ROSAI_DOWNLOAD_CUAD")
+        os.environ["ROSAI_DOWNLOAD_CUAD"] = "1"
+        try:
+            count = execute_eval(
+                config_text,
+                pack_text,
+                root,
+                engine=engine,
+            )
+        finally:
+            if previous is None:
+                os.environ.pop("ROSAI_DOWNLOAD_CUAD", None)
+            else:
+                os.environ["ROSAI_DOWNLOAD_CUAD"] = previous
         volume.commit()
-        return len(completions)
+        return count
 
     @app.local_entrypoint()
-    def evaluate(config: str = "configs/modal-eval-lean.yaml") -> None:
-        plan_eval(config)
-        remote_eval.remote(Path(config).read_text(encoding="utf-8"))
+    def evaluate(
+        config: str = "configs/modal-eval-lean.yaml",
+        pack: str = "packs/legal.yaml",
+    ) -> None:
+        plan = plan_eval(config)
+        remote_eval.with_options(timeout=plan.seconds).remote(
+            Path(config).read_text(encoding="utf-8"),
+            Path(pack).read_text(encoding="utf-8"),
+        )
 
 
 try:

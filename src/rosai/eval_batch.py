@@ -35,6 +35,23 @@ def run_eval(prepared: Prepared, engine, dest, volume_dir, *, batch_size: int, l
     return _score(prepared, read_completions(volume_dir), dest, limit)
 
 
+def clean_answer(text: str) -> str:
+    """Drop the chat end marker the model emits after the span."""
+    for marker in ("<|im_end|>", "<|endoftext|>"):
+        if marker in text:
+            text = text.split(marker, 1)[0]
+    return text.strip()
+
+
+def write_predictions(directory, rows: list[dict]) -> None:
+    path = Path(directory)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "predictions.json").write_text(
+        json.dumps(rows, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def write_completions(directory, completions: list[str]) -> None:
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
@@ -53,17 +70,38 @@ def read_completions(directory) -> list[str]:
 class VllmEngine:
     """vLLM adapter. The import happens on the first batch, not at startup."""
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, adapter_dir: str | None = None) -> None:
         self.model_id = model_id
+        self.adapter_dir = adapter_dir
         self._llm = None
+        self._sampling = None
+        self._lora = None
 
     def generate(self, batch: list[str]) -> list[str]:
         if self._llm is None:
-            from vllm import LLM
+            from vllm import LLM, SamplingParams
 
-            self._llm = LLM(model=self.model_id)
-        outputs = self._llm.generate(batch)
+            kwargs = {"model": self.model_id}
+            if self.adapter_dir:
+                from vllm.lora.request import LoRARequest
+
+                kwargs["enable_lora"] = True
+                kwargs["max_lora_rank"] = _adapter_rank(self.adapter_dir)
+                self._lora = LoRARequest("rosai", 1, self.adapter_dir)
+            self._llm = LLM(**kwargs)
+            self._sampling = SamplingParams(temperature=0, max_tokens=1024)
+        outputs = self._llm.generate(
+            batch, sampling_params=self._sampling, lora_request=self._lora
+        )
         return [output.outputs[0].text for output in outputs]
+
+
+def _adapter_rank(adapter_dir: str) -> int:
+    path = Path(adapter_dir) / "adapter_config.json"
+    if not path.is_file():
+        return 16
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return int(raw.get("r") or 16)
 
 
 def _complete(prepared: Prepared, engine, batch_size: int, limit) -> list[str]:

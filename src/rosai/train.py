@@ -101,13 +101,19 @@ def format_pair(pair: InstructionPair, *, thinking: bool) -> str:
     """Qwen3 chat text. Thinking stays off, so the assistant turn is an empty think block."""
     if thinking:
         raise TrainingError("Qwen3 QLoRA keeps thinking off")
+    return format_prompt(pair, thinking=False) + f"{pair.completion}<|im_end|>\n"
+
+
+def format_prompt(pair: InstructionPair, *, thinking: bool) -> str:
+    """The trained prompt, stopped where the span answer begins."""
+    if thinking:
+        raise TrainingError("Qwen3 QLoRA keeps thinking off")
     question = pair.messages[0][1]
     return (
         "<|im_start|>user\n"
         f"{question}<|im_end|>\n"
         "<|im_start|>assistant\n"
         "<think>\n\n</think>\n\n"
-        f"{pair.completion}<|im_end|>\n"
     )
 
 

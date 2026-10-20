@@ -614,6 +614,129 @@ def test_remote_train_does_not_commit_a_refused_run(tmp_path, monkeypatch):
     assert not (tmp_path / "vol" / "adapter").exists()
 
 
+class _ListEngine:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.batches: list[list[str]] = []
+
+    def generate(self, batch: list[str]) -> list[str]:
+        self.batches.append(list(batch))
+        return [self.text for _ in batch]
+
+
+def _held_out_pack(tmp_path: Path) -> str:
+    (tmp_path / "labels.csv").write_text(
+        "document_id,split,context,Governing Law\n"
+        "contract-c,test,Nevada law.,Nevada\n"
+        "contract-d,test,Delaware law.,Delaware\n",
+        encoding="utf-8",
+    )
+    return (
+        "id: mini\n"
+        "dev_fraction: 0\n"
+        "sources:\n"
+        "  - id: mini\n"
+        "    licence: cc-by-4.0\n"
+        f"    path: {tmp_path}\n"
+    )
+
+
+def test_remote_eval_writes_held_out_predictions_and_commits(tmp_path, monkeypatch):
+    import rosai.modal_app as app
+
+    monkeypatch.setenv("ROSAI_CHECKPOINT_DIR", str(tmp_path / "vol"))
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    engine = _ListEngine("Nevada")
+    try:
+        app._attach(fake)
+        remote = fake.functions["remote_eval"]
+        assert remote.resources["gpu"] == "A100-80GB"
+        assert remote.resources["timeout"] == 1800
+        assert remote.resources["cpu"] == 8
+        assert remote.resources["memory"] == 32768
+        assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
+        image = remote.resources["image"]
+        assert "vllm" in image.packages
+        assert image.variables["HF_HOME"] == "/checkpoints/hf"
+        assert image.sources == ("rosai",)
+        count = remote.fn(
+            Path("configs/modal-eval-lean.yaml").read_text(encoding="utf-8"),
+            _held_out_pack(tmp_path),
+            engine,
+        )
+    finally:
+        app.train, app.evaluate = previous
+
+    assert count == 2
+    written = json.loads(
+        (tmp_path / "vol" / "predictions.json").read_text(encoding="utf-8")
+    )
+    assert [row["document_id"] for row in written] == ["contract-c", "contract-d"]
+    assert written[0]["user"] == (
+        "Nevada law.\n\nQuote the Governing Law clause or answer none."
+    )
+    assert written[0]["prediction"] == "Nevada"
+    assert fake.volume is not None
+    assert fake.volume.commits == 1
+    assert "ROSAI_DOWNLOAD_CUAD" not in os.environ
+    assert "vllm" not in sys.modules
+    assert "modal" not in sys.modules
+
+
+def test_remote_eval_does_not_commit_a_refused_run(tmp_path, monkeypatch):
+    import rosai.modal_app as app
+    from rosai.cost import CostCeilingError
+
+    monkeypatch.setenv("ROSAI_CHECKPOINT_DIR", str(tmp_path / "vol"))
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    config = (
+        Path("configs/modal-eval-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("gpu_seconds: 600", "gpu_seconds: 10800")
+    )
+    engine = _ListEngine("Nevada")
+    try:
+        app._attach(fake)
+        with pytest.raises(CostCeilingError):
+            fake.functions["remote_eval"].fn(
+                config, _held_out_pack(tmp_path), engine
+            )
+    finally:
+        app.train, app.evaluate = previous
+
+    assert engine.batches == []
+    assert fake.volume is not None
+    assert fake.volume.commits == 0
+    assert not (tmp_path / "vol" / "predictions.json").exists()
+
+
+def test_eval_entrypoint_stops_at_the_timeout_in_its_config(tmp_path):
+    import rosai.modal_app as app
+
+    fake = _FakeModal()
+    previous = (app.train, app.evaluate)
+    pack = tmp_path / "pack.yaml"
+    pack.write_text("id: local\n", encoding="utf-8")
+    try:
+        app._attach(fake)
+        app.evaluate("configs/modal-eval-lean.yaml", str(pack))
+        app.evaluate("configs/modal-eval-full.yaml", str(pack))
+        sent = fake.functions["remote_eval"].calls
+    finally:
+        app.train, app.evaluate = previous
+
+    assert fake.functions["remote_eval"].launch_timeouts == [600, 1800]
+    assert sent[0] == (
+        Path("configs/modal-eval-lean.yaml").read_text(encoding="utf-8"),
+        "id: local\n",
+    )
+    assert sent[1][0] == Path("configs/modal-eval-full.yaml").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_entrypoint_stops_a_run_at_the_timeout_in_its_config(tmp_path):
     import rosai.modal_app as app
 
