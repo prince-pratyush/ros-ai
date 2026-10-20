@@ -60,21 +60,29 @@ def prepare(
         read=read,
         categories=chosen,
     )
-    train_pool = tuple(sorted(row[0] for row in rows if row[1] == "train"))
-    held_out_ids = tuple(sorted(row[0] for row in rows if row[1] == "test"))
+    train_pool = tuple(sorted({row[0] for row in rows if row[1] == "train"}))
+    held_out_ids = tuple(sorted({row[0] for row in rows if row[1] == "test"}))
     dev_count = int(len(train_pool) * pack.dev_fraction)
     dev_ids = train_pool[-dev_count:] if dev_count else ()
     dev_set = set(dev_ids)
-    by_id = {row[0]: row for row in rows}
-    train_pairs = tuple(
-        _pair(by_id[document_id])
-        for document_id in train_pool
-        if document_id not in dev_set
+    by_document: dict[str, dict[str, tuple[str, str, str, str]]] = {}
+    for row in rows:
+        by_document.setdefault(row[0], {})[row[2]] = row
+
+    def pairs_for(document_ids: tuple[str, ...]) -> tuple[InstructionPair, ...]:
+        built: list[InstructionPair] = []
+        for document_id in document_ids:
+            grouped = by_document[document_id]
+            for category in chosen:
+                built.append(_pair(grouped[category]))
+        return tuple(built)
+
+    train_ids = tuple(
+        document_id for document_id in train_pool if document_id not in dev_set
     )
-    dev_pairs = tuple(_pair(by_id[document_id]) for document_id in dev_ids)
-    held_out_pairs = tuple(
-        _pair(by_id[document_id]) for document_id in held_out_ids
-    )
+    train_pairs = pairs_for(train_ids)
+    dev_pairs = pairs_for(dev_ids)
+    held_out_pairs = pairs_for(held_out_ids)
     return Prepared(
         attribution=pack.attribution,
         split_proof=SplitProof(
