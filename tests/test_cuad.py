@@ -116,11 +116,11 @@ def test_full_configs_list_every_cuad_category(tmp_path):
     assert prepared.dev == ()
     assert prepared.held_out == ()
     by_question = {pair.messages[0][1]: pair.completion for pair in prepared.train}
-    assert by_question["Quote the Governing Law clause or answer none."] == "Nevada"
-    assert by_question["Quote the Parties clause or answer none."] == "Acme"
-    assert by_question["Quote the Document Name clause or answer none."] == "none"
+    assert by_question["x\n\nQuote the Governing Law clause or answer none."] == "Nevada"
+    assert by_question["x\n\nQuote the Parties clause or answer none."] == "Acme"
+    assert by_question["x\n\nQuote the Document Name clause or answer none."] == "none"
     assert (
-        by_question["Quote the Third Party Beneficiary clause or answer none."]
+        by_question["x\n\nQuote the Third Party Beneficiary clause or answer none."]
         == "none"
     )
     assert [pair.document_id for pair in prepared.train] == ["contract-a"] * 41
@@ -178,7 +178,7 @@ def test_prepare_quotes_the_requested_category(tmp_path):
         ("contract-a", "Acme Corp")
     ]
     assert prepared.train[0].messages == (
-        ("user", "Quote the Parties clause or answer none."),
+        ("user", "x\n\nQuote the Parties clause or answer none."),
     )
     assert prepared.dev == ()
     assert prepared.held_out == ()
@@ -216,22 +216,22 @@ def test_each_category_stays_with_its_document(tmp_path):
         (pair.document_id, pair.messages[0][1], pair.completion)
         for pair in prepared.train
     ] == [
-        ("contract-a", "Quote the Governing Law clause or answer none.", "Nevada"),
-        ("contract-a", "Quote the Parties clause or answer none.", "Acme"),
+        ("contract-a", "x\n\nQuote the Governing Law clause or answer none.", "Nevada"),
+        ("contract-a", "x\n\nQuote the Parties clause or answer none.", "Acme"),
     ]
     assert [
         (pair.document_id, pair.messages[0][1], pair.completion)
         for pair in prepared.dev
     ] == [
-        ("contract-b", "Quote the Governing Law clause or answer none.", "none"),
-        ("contract-b", "Quote the Parties clause or answer none.", "Beta"),
+        ("contract-b", "x\n\nQuote the Governing Law clause or answer none.", "none"),
+        ("contract-b", "x\n\nQuote the Parties clause or answer none.", "Beta"),
     ]
     assert [
         (pair.document_id, pair.messages[0][1], pair.completion)
         for pair in prepared.held_out
     ] == [
-        ("contract-c", "Quote the Governing Law clause or answer none.", "New York"),
-        ("contract-c", "Quote the Parties clause or answer none.", "Gamma"),
+        ("contract-c", "x\n\nQuote the Governing Law clause or answer none.", "New York"),
+        ("contract-c", "x\n\nQuote the Parties clause or answer none.", "Gamma"),
     ]
     proof = prepared.split_proof
     assert proof.train_ids == ("contract-a", "contract-b")
@@ -336,7 +336,7 @@ def test_archive_pairs_quote_governing_law_spans(tmp_path):
     assert [(pair.document_id, pair.completion) for pair in prepared.held_out] == [
         ("contract-c", "New York")
     ]
-    assert prepared.train[0].messages == (("user", _GOVERNING_LAW),)
+    assert prepared.train[0].messages == (("user", f"x\n\n{_GOVERNING_LAW}"),)
     assert any("CC BY 4.0" in line for line in prepared.attribution)
 
 

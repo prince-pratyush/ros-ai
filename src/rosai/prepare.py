@@ -43,6 +43,12 @@ class Prepared:
     held_out: tuple[InstructionPair, ...]
 
 
+# Chat wrapper plus the clause question. The remaining tokens are split
+# between the contract window and the span the model has to quote.
+_TEMPLATE_TOKENS = 32
+_CHARS_PER_TOKEN = 4
+
+
 def prepare(
     pack: Pack,
     *,
@@ -50,6 +56,7 @@ def prepare(
     cache_dir: str | Path | None = None,
     read=None,
     categories: tuple[str, ...] | None = None,
+    max_seq_length: int = 2048,
 ) -> Prepared:
     chosen = (_CATEGORY,) if categories is None else categories
     _require_known(chosen)
@@ -65,7 +72,9 @@ def prepare(
     dev_count = int(len(train_pool) * pack.dev_fraction)
     dev_ids = train_pool[-dev_count:] if dev_count else ()
     dev_set = set(dev_ids)
-    by_document: dict[str, dict[str, tuple[str, str, str, str]]] = {}
+    by_document: dict[
+        str, dict[str, tuple[str, str, str, str, tuple[tuple[str, int], ...]]]
+    ] = {}
     for row in rows:
         by_document.setdefault(row[0], {})[row[2]] = row
 
@@ -74,7 +83,7 @@ def prepare(
         for document_id in document_ids:
             grouped = by_document[document_id]
             for category in chosen:
-                built.append(_pair(grouped[category]))
+                built.extend(_pairs(grouped[category], max_seq_length))
         return tuple(built)
 
     train_ids = tuple(
@@ -103,9 +112,9 @@ def _rows(
     cache_dir: str | Path | None,
     read,
     categories: tuple[str, ...],
-) -> tuple[tuple[str, str, str, str], ...]:
+) -> tuple[tuple[str, str, str, str, tuple[tuple[str, int], ...]], ...]:
     published = _published_assignment() if pack.split == "published" else None
-    found: list[tuple[str, str, str, str]] = []
+    found: list[tuple[str, str, str, str, tuple[tuple[str, int], ...]]] = []
     splits_by_id: dict[str, set[str]] = {}
     saw_csv = False
     for source in pack.sources:
@@ -124,13 +133,21 @@ def _rows(
                 seen.add(split)
                 if len(seen) > 1:
                     raise SplitError(f"{document_id} is in more than one split")
+                context = str(record.get("context") or "")
                 for category in categories:
                     if category not in record:
                         raise CategoryError(
                             f"{category} is not a category in {path}"
                         )
+                    cell = record[category].strip()
                     found.append(
-                        (document_id, split, category, record[category].strip())
+                        (
+                            document_id,
+                            split,
+                            category,
+                            context,
+                            _locate(context, cell),
+                        )
                     )
     if saw_csv:
         return tuple(found)
@@ -138,13 +155,15 @@ def _rows(
     if archive is None and not pinned:
         return ()
     payload = _archive_bytes(pack, archive, cache_dir, read)
-    for document_id, split, category, span in clause_rows(payload, categories):
+    for document_id, split, category, context, spans in clause_rows(
+        payload, categories
+    ):
         _require_published(published, document_id, split)
         seen = splits_by_id.setdefault(document_id, set())
         seen.add(split)
         if len(seen) > 1:
             raise SplitError(f"{document_id} is in more than one split")
-        found.append((document_id, split, category, span))
+        found.append((document_id, split, category, context, spans))
     return tuple(found)
 
 
@@ -193,13 +212,74 @@ def _require_known(categories: tuple[str, ...]) -> None:
             raise CategoryError(f"{category} is not a CUAD category")
 
 
-def _pair(row: tuple[str, str, str, str]) -> InstructionPair:
-    document_id, _split, category, span = row
-    completion = span if span else "none"
+def _pairs(
+    row: tuple[str, str, str, str, tuple[tuple[str, int], ...]],
+    max_seq_length: int,
+) -> tuple[InstructionPair, ...]:
+    document_id, _split, category, context, spans = row
     question = f"Quote the {category} clause or answer none."
-    return InstructionPair(
-        document_id=document_id,
-        task=_TASK,
-        messages=(("user", question),),
-        completion=completion,
-    )
+    if not context:
+        texts = [text for text, _offset in spans if text]
+        completion = " | ".join(texts) if texts else "none"
+        return (
+            InstructionPair(
+                document_id=document_id,
+                task=_TASK,
+                messages=(("user", question),),
+                completion=completion,
+            ),
+        )
+    built: list[InstructionPair] = []
+    for start, chunk in _windows(context, _window_chars(max_seq_length)):
+        end = start + len(chunk)
+        chosen = [
+            text
+            for text, offset in spans
+            if text and start <= offset < end
+        ]
+        built.append(
+            InstructionPair(
+                document_id=document_id,
+                task=_TASK,
+                messages=(("user", f"{chunk}\n\n{question}"),),
+                completion=" | ".join(chosen) if chosen else "none",
+            )
+        )
+    return tuple(built)
+
+
+def _window_chars(max_seq_length: int) -> int:
+    usable = max(1, (max_seq_length - _TEMPLATE_TOKENS) // 2)
+    return usable * _CHARS_PER_TOKEN
+
+
+def _windows(context: str, size: int) -> tuple[tuple[int, str], ...]:
+    chunks: list[tuple[int, str]] = []
+    start = 0
+    length = len(context)
+    while start < length:
+        end = min(start + size, length)
+        chunks.append((start, context[start:end]))
+        start = end
+    return tuple(chunks)
+
+
+def _locate(context: str, cell: str) -> tuple[tuple[str, int], ...]:
+    """Character offsets for a label-file span. No context keeps the text only."""
+    if not cell:
+        return ()
+    if not context:
+        return tuple((part, 0) for part in _span_parts(cell))
+    found: list[tuple[str, int]] = []
+    cursor = 0
+    for part in _span_parts(cell):
+        offset = context.find(part, cursor)
+        if offset < 0:
+            offset = 0
+        found.append((part, offset))
+        cursor = offset + len(part)
+    return tuple(found)
+
+
+def _span_parts(cell: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in cell.split(" | ") if part.strip())

@@ -119,6 +119,7 @@ def execute_train(
             load_pack(pack_path),
             archive=archive,
             categories=categories,
+            max_seq_length=run.max_seq_length,
         )
     backend = UnslothBackend(
         run,

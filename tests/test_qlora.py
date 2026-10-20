@@ -181,6 +181,71 @@ def _clause_pack(tmp_path: Path) -> str:
     )
 
 
+def test_execute_train_windows_the_contract_to_the_configured_length(tmp_path):
+    import io
+    import json
+    import zipfile
+
+    from rosai.modal_app import execute_train
+
+    context = ("A" * 16) + ("B" * 16)
+    qas = [
+        {
+            "id": "contract-a__Governing Law_0",
+            "question": (
+                'Highlight the parts (if any) of this contract related to '
+                '"Governing Law" that should be reviewed by a lawyer.'
+            ),
+            "answers": [{"text": "B" * 16, "answer_start": 16}],
+            "is_impossible": False,
+        }
+    ]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(
+            "train_separate_questions.json",
+            json.dumps(
+                {
+                    "version": "1",
+                    "data": [
+                        {
+                            "title": "contract-a",
+                            "paragraphs": [{"context": context, "qas": qas}],
+                        }
+                    ],
+                }
+            ),
+        )
+        archive.writestr("test.json", json.dumps({"version": "1", "data": []}))
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("max_seq_length: 2048", "max_seq_length: 40")
+        .replace("limit: 256", "limit: 8")
+    )
+    session = _SavingSession()
+
+    execute_train(
+        config,
+        "id: mini\ndev_fraction: 0\n",
+        tmp_path / "volume",
+        archive=buffer.getvalue(),
+        session=session,
+    )
+
+    question = "Quote the Governing Law clause or answer none."
+    assert session.request.texts[0].startswith(
+        f"<|im_start|>user\n{'A' * 16}\n\n{question}<|im_end|>\n"
+    )
+    assert session.request.texts[0].endswith("none<|im_end|>\n")
+    assert session.request.texts[1].startswith(
+        f"<|im_start|>user\n{'B' * 16}\n\n{question}<|im_end|>\n"
+    )
+    assert session.request.texts[1].endswith(f"{'B' * 16}<|im_end|>\n")
+    assert len(session.request.texts) == 2
+    assert session.request.max_seq_length == 40
+
+
 def test_execute_train_fits_the_named_category_under_the_cost_guard(tmp_path, capsys):
     from rosai.modal_app import execute_train
 
