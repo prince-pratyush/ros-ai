@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from rosai.cuad import CategoryError
 from rosai.fetch import OfflineError, cached_download
 from rosai.pack import Source, load_pack
 from rosai.prepare import prepare
@@ -55,6 +56,22 @@ def test_prepare_quotes_the_requested_category(tmp_path):
     )
     assert prepared.dev == ()
     assert prepared.held_out == ()
+
+
+def test_prepare_rejects_an_unknown_category(tmp_path):
+    payload = _archive(
+        (("contract-a", "train", ("somewhere",)),),
+        category="Not A Clause",
+    )
+    pack = _pinned_pack(tmp_path, dev_fraction="0")
+
+    with pytest.raises(CategoryError) as exc:
+        prepare(
+            load_pack(pack),
+            archive=payload,
+            categories=("Not A Clause",),
+        )
+    assert "Not A Clause" in str(exc.value)
 
 
 def test_archive_pairs_quote_governing_law_spans(tmp_path):

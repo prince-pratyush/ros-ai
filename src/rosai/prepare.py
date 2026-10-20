@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from rosai.cuad import clause_rows
+from rosai.cuad import CUAD_CATEGORIES, CategoryError, clause_rows
 from rosai.fetch import OfflineError, cached_download
 from rosai.pack import Pack
 
@@ -52,6 +52,7 @@ def prepare(
     categories: tuple[str, ...] | None = None,
 ) -> Prepared:
     chosen = (_CATEGORY,) if categories is None else categories
+    _require_known(chosen)
     rows = _rows(
         pack,
         archive=archive,
@@ -170,6 +171,13 @@ def _require_published(
         raise SplitError(
             f"{document_id} is labelled {split!r} but the published split is {expected!r}"
         )
+
+
+def _require_known(categories: tuple[str, ...]) -> None:
+    known = set(CUAD_CATEGORIES)
+    for category in categories:
+        if category not in known:
+            raise CategoryError(f"{category} is not a CUAD category")
 
 
 def _pair(row: tuple[str, str, str, str]) -> InstructionPair:
