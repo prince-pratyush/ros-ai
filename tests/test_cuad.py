@@ -219,6 +219,40 @@ def test_archive_pairs_quote_governing_law_spans(tmp_path):
     assert any("CC BY 4.0" in line for line in prepared.attribution)
 
 
+def test_prepare_reads_a_cached_archive_offline(tmp_path, monkeypatch):
+    payload = _archive((("contract-a", "train", ("Nevada",)),))
+    digest = hashlib.sha256(payload).hexdigest()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / digest).write_bytes(payload)
+    pack = tmp_path / "pack.yaml"
+    pack.write_text(
+        "id: tiny\n"
+        "dev_fraction: 0\n"
+        "sources:\n"
+        "  - id: tiny\n"
+        "    licence: cc-by-4.0\n"
+        "    url: https://example.test/data.zip\n"
+        f"    sha256: {digest}\n"
+        "attribution:\n"
+        '  - "The Atticus Project, CUAD v1, CC BY 4.0"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("ROSAI_DOWNLOAD_CUAD", raising=False)
+
+    def explode(url):
+        raise AssertionError(url)
+
+    monkeypatch.setattr("urllib.request.urlopen", explode)
+
+    prepared = prepare(load_pack(pack), cache_dir=cache)
+
+    assert [(pair.document_id, pair.completion) for pair in prepared.train] == [
+        ("contract-a", "Nevada")
+    ]
+    assert prepared.held_out == ()
+
+
 def test_legal_pack_stays_offline_without_the_flag(tmp_path, monkeypatch):
     monkeypatch.delenv("ROSAI_DOWNLOAD_CUAD", raising=False)
 
