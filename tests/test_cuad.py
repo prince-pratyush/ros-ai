@@ -45,6 +45,21 @@ def test_cache_reuses_matching_bytes_and_replaces_a_bad_file(tmp_path):
     assert (tmp_path / digest).read_bytes() == payload
 
 
+def test_config_rejects_an_unknown_category(tmp_path):
+    from rosai.cuad import load_categories
+
+    path = tmp_path / "run.yaml"
+    path.write_text(
+        Path("configs/modal-lean.yaml").read_text(encoding="utf-8").replace(
+            "Governing Law", "Governing law"
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(CategoryError) as exc:
+        load_categories(path)
+    assert "Governing law" in str(exc.value)
+
+
 def test_lean_configs_list_governing_law():
     from rosai.cuad import load_categories
 
