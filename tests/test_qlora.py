@@ -339,11 +339,20 @@ def test_execute_train_refuses_a_backend_other_than_unsloth(tmp_path):
 
 class _Image:
     def __init__(self) -> None:
-        self.packages: tuple[str, ...] = ()
+        self.packages: list[str] = []
+        self.indexes: list[str] = []
         self.sources: tuple[str, ...] = ()
+        self.variables: dict[str, str] = {}
 
-    def pip_install(self, *packages: str):
-        self.packages = packages
+    def pip_install(self, *packages: str, **kwargs):
+        self.packages.extend(packages)
+        index = kwargs.get("extra_index_url")
+        if index:
+            self.indexes.append(index)
+        return self
+
+    def env(self, values: dict[str, str]):
+        self.variables.update(values)
         return self
 
     def add_local_python_source(self, *names: str):
@@ -438,9 +447,12 @@ def test_remote_train_saves_the_lora_adapter_and_commits_the_volume(
         assert remote.resources["timeout"] == 10800
         assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
         assert remote.resources["retries"].max_retries == 3
-        assert "unsloth" in remote.resources["image"].packages
-        assert "torch" in remote.resources["image"].packages
-        assert "rosai" in remote.resources["image"].sources
+        image = remote.resources["image"]
+        assert "unsloth" in image.packages
+        assert "torch" in image.packages
+        assert image.indexes == ["https://download.pytorch.org/whl/cu128"]
+        assert image.variables["HF_HOME"] == "/checkpoints/hf"
+        assert "rosai" in image.sources
         session = _SavingSession()
         count = remote.fn(
             Path("configs/modal-lean.yaml").read_text(encoding="utf-8"),

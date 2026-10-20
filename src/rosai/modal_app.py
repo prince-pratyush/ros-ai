@@ -237,10 +237,10 @@ def _eval_resources(volume, modal) -> dict:
     }
 
 
-# Installed on the GPU image only. Importing this module does not import them.
+# CUDA 12.8 wheels cover the preemptible A100. Importing this module does not import them.
+_CUDA_INDEX = "https://download.pytorch.org/whl/cu128"
 _TRAIN_PACKAGES = (
     "pyyaml",
-    "torch",
     "unsloth",
     "trl",
     "transformers",
@@ -248,13 +248,16 @@ _TRAIN_PACKAGES = (
     "peft",
     "bitsandbytes",
     "accelerate",
+    "hf_transfer",
 )
 
 
 def _train_image(modal):
     return (
         modal.Image.debian_slim(python_version="3.12")
+        .pip_install("torch", extra_index_url=_CUDA_INDEX)
         .pip_install(*_TRAIN_PACKAGES)
+        .env({"HF_HOME": "/checkpoints/hf", "HF_HUB_ENABLE_HF_TRANSFER": "1"})
         .add_local_python_source("rosai")
     )
 
