@@ -38,6 +38,25 @@ def test_cache_reuses_matching_bytes_and_replaces_a_bad_file(tmp_path):
     assert (tmp_path / digest).read_bytes() == payload
 
 
+def test_prepare_quotes_the_requested_category(tmp_path):
+    payload = _archive(
+        (("contract-a", "train", ("Acme Corp",)),),
+        category="Parties",
+    )
+    pack = _pinned_pack(tmp_path, dev_fraction="0")
+
+    prepared = prepare(load_pack(pack), archive=payload, categories=("Parties",))
+
+    assert [(pair.document_id, pair.completion) for pair in prepared.train] == [
+        ("contract-a", "Acme Corp")
+    ]
+    assert prepared.train[0].messages == (
+        ("user", "Quote the Parties clause or answer none."),
+    )
+    assert prepared.dev == ()
+    assert prepared.held_out == ()
+
+
 def test_archive_pairs_quote_governing_law_spans(tmp_path):
     payload = _archive(
         (
@@ -87,16 +106,37 @@ def test_legal_pack_stays_offline_without_the_flag(tmp_path, monkeypatch):
     assert "ROSAI_DOWNLOAD_CUAD" in str(exc.value)
 
 
-def _archive(contracts: tuple[tuple[str, str, tuple[str, ...]], ...]) -> bytes:
+def _pinned_pack(tmp_path: Path, *, dev_fraction: str) -> Path:
+    pack = tmp_path / "pack.yaml"
+    pack.write_text(
+        "id: tiny\n"
+        f"dev_fraction: {dev_fraction}\n"
+        "sources:\n"
+        "  - id: tiny\n"
+        "    licence: cc-by-4.0\n"
+        "    url: https://example.test/data.zip\n"
+        "    sha256: abc\n"
+        "attribution:\n"
+        '  - "The Atticus Project, CUAD v1, CC BY 4.0"\n',
+        encoding="utf-8",
+    )
+    return pack
+
+
+def _archive(
+    contracts: tuple[tuple[str, str, tuple[str, ...]], ...],
+    *,
+    category: str = "Governing Law",
+) -> bytes:
     train: list[dict] = []
     test: list[dict] = []
     for title, split, spans in contracts:
         qas = [
             {
-                "id": f"{title}__Governing Law_0",
+                "id": f"{title}__{category}_0",
                 "question": (
-                    'Highlight the parts (if any) of this contract related to '
-                    '"Governing Law" that should be reviewed by a lawyer.'
+                    "Highlight the parts (if any) of this contract related to "
+                    f'"{category}" that should be reviewed by a lawyer.'
                 ),
                 "answers": [{"text": text, "answer_start": 0} for text in spans],
                 "is_impossible": not spans,

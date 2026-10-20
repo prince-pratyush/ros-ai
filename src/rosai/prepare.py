@@ -49,8 +49,16 @@ def prepare(
     archive: bytes | None = None,
     cache_dir: str | Path | None = None,
     read=None,
+    categories: tuple[str, ...] | None = None,
 ) -> Prepared:
-    rows = _rows(pack, archive=archive, cache_dir=cache_dir, read=read)
+    chosen = (_CATEGORY,) if categories is None else categories
+    rows = _rows(
+        pack,
+        archive=archive,
+        cache_dir=cache_dir,
+        read=read,
+        categories=chosen,
+    )
     train_pool = tuple(sorted(row[0] for row in rows if row[1] == "train"))
     held_out_ids = tuple(sorted(row[0] for row in rows if row[1] == "test"))
     dev_count = int(len(train_pool) * pack.dev_fraction)
@@ -85,9 +93,10 @@ def _rows(
     archive: bytes | None,
     cache_dir: str | Path | None,
     read,
-) -> tuple[tuple[str, str, str], ...]:
+    categories: tuple[str, ...],
+) -> tuple[tuple[str, str, str, str], ...]:
     published = _published_assignment() if pack.split == "published" else None
-    found: list[tuple[str, str, str]] = []
+    found: list[tuple[str, str, str, str]] = []
     splits_by_id: dict[str, set[str]] = {}
     saw_csv = False
     for source in pack.sources:
@@ -106,20 +115,22 @@ def _rows(
                 seen.add(split)
                 if len(seen) > 1:
                     raise SplitError(f"{document_id} is in more than one split")
-                found.append((document_id, split, record[_CATEGORY].strip()))
+                found.append(
+                    (document_id, split, _CATEGORY, record[_CATEGORY].strip())
+                )
     if saw_csv:
         return tuple(found)
     pinned = any(source.url and source.sha256 for source in pack.sources)
     if archive is None and not pinned:
         return ()
     payload = _archive_bytes(pack, archive, cache_dir, read)
-    for document_id, split, _category, span in clause_rows(payload, (_CATEGORY,)):
+    for document_id, split, category, span in clause_rows(payload, categories):
         _require_published(published, document_id, split)
         seen = splits_by_id.setdefault(document_id, set())
         seen.add(split)
         if len(seen) > 1:
             raise SplitError(f"{document_id} is in more than one split")
-        found.append((document_id, split, span))
+        found.append((document_id, split, category, span))
     return tuple(found)
 
 
@@ -161,10 +172,10 @@ def _require_published(
         )
 
 
-def _pair(row: tuple[str, str, str]) -> InstructionPair:
-    document_id, _split, span = row
+def _pair(row: tuple[str, str, str, str]) -> InstructionPair:
+    document_id, _split, category, span = row
     completion = span if span else "none"
-    question = "Quote the Governing Law clause or answer none."
+    question = f"Quote the {category} clause or answer none."
     return InstructionPair(
         document_id=document_id,
         task=_TASK,
