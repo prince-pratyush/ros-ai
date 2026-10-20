@@ -76,6 +76,35 @@ class _SavingSession:
         return 4
 
 
+def test_run_yaml_sets_lora_rank_alpha_and_learning_rate(tmp_path):
+    from rosai.train import UnslothBackend, load_run, train
+
+    config = tmp_path / "run.yaml"
+    config.write_text(
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("lora_r: 16\n", "lora_r: 8\n")
+        .replace("lora_alpha: 16\n", "lora_alpha: 32\n")
+        .replace("learning_rate: 2.0e-4\n", "learning_rate: 1.0e-4\n"),
+        encoding="utf-8",
+    )
+    prepared = prepare(load_pack(Path("tests/fixtures/cuad_mini/pack.yaml")))
+    session = _SavingSession()
+    backend = UnslothBackend(
+        load_run(config),
+        tmp_path,
+        epochs=1,
+        checkpoint_every=50,
+        session=session,
+    )
+
+    train(prepared, load_run(config), backend, tmp_path)
+
+    assert session.request.lora_r == 8
+    assert session.request.lora_alpha == 32
+    assert session.request.learning_rate == 1e-4
+
+
 def test_unsloth_backend_fits_qwen3_qlora_and_saves_the_adapter(tmp_path):
     from rosai.train import UnslothBackend, load_run, train
 
@@ -100,6 +129,7 @@ def test_unsloth_backend_fits_qwen3_qlora_and_saves_the_adapter(tmp_path):
     assert request.target_modules == _TARGETS
     assert request.lora_r == 16
     assert request.lora_alpha == 16
+    assert request.learning_rate == 2e-4
     assert request.seed == 3407
     assert request.max_seq_length == 2048
     assert request.batch_size == 1

@@ -14,6 +14,9 @@ max_gpu_hours: 1
 limit: 256
 epochs: 1
 batch_size: 1
+lora_r: 16
+lora_alpha: 16
+learning_rate: 2.0e-4
 checkpoint_every: 50
 volume: rosai-checkpoints
 categories:

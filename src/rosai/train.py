@@ -21,6 +21,9 @@ class Run:
     limit: int | None = None
     backend: str = "fake"
     batch_size: int = 1
+    lora_r: int = 16
+    lora_alpha: int = 16
+    learning_rate: float = 2e-4
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,9 @@ def load_run(path: str | Path) -> Run:
         limit=None if limit is None else int(limit),
         backend=str(raw.get("backend") or "fake"),
         batch_size=int(raw.get("batch_size", 1)),
+        lora_r=int(raw.get("lora_r", 16)),
+        lora_alpha=int(raw.get("lora_alpha", 16)),
+        learning_rate=float(raw.get("learning_rate", 2e-4)),
     )
 
 
@@ -84,6 +90,7 @@ class QloraRequest:
     target_modules: tuple[str, ...]
     lora_r: int
     lora_alpha: int
+    learning_rate: float
     adapter_dir: str
     output_dir: str
     resume_step: int
@@ -144,8 +151,9 @@ class UnslothBackend:
             completion_only=completion_only,
             load_in_4bit=True,
             target_modules=_QLORA_TARGETS,
-            lora_r=16,
-            lora_alpha=16,
+            lora_r=self.run.lora_r,
+            lora_alpha=self.run.lora_alpha,
+            learning_rate=self.run.learning_rate,
             adapter_dir=str(adapter_dir),
             output_dir=str(self.dest / "trainer"),
             resume_step=self.start_step,
@@ -278,7 +286,7 @@ def fit_qlora(request: QloraRequest, on_checkpoint=None) -> int:
             dataset_text_field="text",
             per_device_train_batch_size=request.batch_size,
             num_train_epochs=request.epochs,
-            learning_rate=2e-4,
+            learning_rate=request.learning_rate,
             logging_steps=1,
             optim="adamw_8bit",
             weight_decay=0.01,
