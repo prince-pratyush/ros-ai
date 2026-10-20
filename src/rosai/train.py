@@ -59,6 +59,37 @@ class TrainingError(Exception):
     """A run cannot be trained as configured."""
 
 
+# Attention and MLP projections. Unsloth's Qwen QLoRA recipe.
+_QLORA_TARGETS = (
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+)
+
+
+@dataclass(frozen=True)
+class QloraRequest:
+    model_id: str
+    max_seq_length: int
+    seed: int
+    batch_size: int
+    epochs: int
+    texts: tuple[str, ...]
+    completion_only: bool
+    load_in_4bit: bool
+    target_modules: tuple[str, ...]
+    lora_r: int
+    lora_alpha: int
+    adapter_dir: str
+    output_dir: str
+    resume_step: int
+    checkpoint_every: int
+
+
 def format_pair(pair: InstructionPair, *, thinking: bool) -> str:
     """Qwen3 chat text. Thinking stays off, so the assistant turn is an empty think block."""
     if thinking:
@@ -71,6 +102,61 @@ def format_pair(pair: InstructionPair, *, thinking: bool) -> str:
         "<think>\n\n</think>\n\n"
         f"{pair.completion}<|im_end|>\n"
     )
+
+
+class UnslothBackend:
+    """4-bit QLoRA through a session. The default session imports unsloth on fit."""
+
+    def __init__(
+        self,
+        run: Run,
+        dest: str | Path,
+        *,
+        epochs: int,
+        checkpoint_every: int,
+        start_step: int = 0,
+        session=None,
+        on_checkpoint=None,
+    ) -> None:
+        self.run = run
+        self.dest = Path(dest)
+        self.epochs = epochs
+        self.checkpoint_every = checkpoint_every
+        self.start_step = start_step
+        self.session = session
+        self.on_checkpoint = on_checkpoint
+        self.step = start_step
+
+    def fit(self, examples, *, completion_only: bool) -> None:
+        if self.run.thinking:
+            raise TrainingError("Qwen3 QLoRA keeps thinking off")
+        texts = tuple(format_pair(example, thinking=False) for example in examples)
+        adapter_dir = self.dest / "adapter"
+        request = QloraRequest(
+            model_id=self.run.model_id,
+            max_seq_length=self.run.max_seq_length,
+            seed=self.run.seed,
+            batch_size=self.run.batch_size,
+            epochs=self.epochs,
+            texts=texts,
+            completion_only=completion_only,
+            load_in_4bit=True,
+            target_modules=_QLORA_TARGETS,
+            lora_r=16,
+            lora_alpha=16,
+            adapter_dir=str(adapter_dir),
+            output_dir=str(self.dest / "trainer"),
+            resume_step=self.start_step,
+            checkpoint_every=self.checkpoint_every,
+        )
+        if self.session is None:
+            self.step = fit_qlora(request, on_checkpoint=self.on_checkpoint)
+        else:
+            self.step = self.session.fit(request, on_checkpoint=self.on_checkpoint)
+        saved = adapter_dir / "adapter_model.safetensors"
+        config = adapter_dir / "adapter_config.json"
+        if not saved.is_file() or not config.is_file():
+            raise TrainingError("QLoRA session did not save the LoRA adapter")
 
 
 class FakeBackend:
