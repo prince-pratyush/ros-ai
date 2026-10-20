@@ -84,6 +84,54 @@ def train(config: str = "configs/modal-lean.yaml") -> TrainPlan:
     return plan_train(config)
 
 
+def execute_train(
+    config_text: str,
+    pack_text: str,
+    checkpoint_dir: str | Path,
+    *,
+    archive: bytes | None = None,
+    session=None,
+    on_checkpoint=None,
+):
+    """Guard the ceiling, fit prepared pairs, and save the LoRA adapter."""
+    import tempfile
+
+    from rosai.cuad import load_categories
+    from rosai.pack import load_pack
+    from rosai.prepare import prepare
+    from rosai.train import Manifest, TrainingError, UnslothBackend, load_run, train
+
+    destination = Path(checkpoint_dir)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp:
+        config_path = Path(tmp) / "run.yaml"
+        config_path.write_text(config_text, encoding="utf-8")
+        plan = plan_train(config_path, checkpoint_dir=destination)
+        run = load_run(config_path)
+        if run.backend != "unsloth":
+            raise TrainingError(f"backend {run.backend!r} is not the QLoRA trainer")
+        categories = load_categories(config_path)
+        pack_path = Path(tmp) / "pack.yaml"
+        pack_path.write_text(pack_text, encoding="utf-8")
+        prepared = prepare(
+            load_pack(pack_path),
+            archive=archive,
+            categories=categories,
+        )
+    backend = UnslothBackend(
+        run,
+        destination,
+        epochs=plan.epochs,
+        checkpoint_every=plan.checkpoint_every,
+        start_step=plan.start_step,
+        session=session,
+        on_checkpoint=on_checkpoint,
+    )
+    manifest: Manifest = train(prepared, run, backend, destination)
+    record_checkpoint(destination, backend.step)
+    return manifest
+
+
 @dataclass(frozen=True)
 class EvalPlan:
     gpu: str

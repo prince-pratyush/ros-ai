@@ -66,6 +66,8 @@ class _SavingSession:
     def fit(self, request, on_checkpoint=None) -> int:
         self.request = request
         self.on_checkpoint = on_checkpoint
+        if on_checkpoint is not None:
+            on_checkpoint()
         path = Path(request.adapter_dir)
         path.mkdir(parents=True, exist_ok=True)
         (path / "adapter_config.json").write_text("{}\n", encoding="utf-8")
@@ -145,6 +147,130 @@ def test_a_checkpoint_save_records_the_step_and_commits(tmp_path):
     assert "unsloth" not in sys.modules
     assert "torch" not in sys.modules
     assert "modal" not in sys.modules
+
+
+def _clause_pack(tmp_path: Path) -> str:
+    (tmp_path / "labels.csv").write_text(
+        "document_id,split,Governing Law,Parties\n"
+        "contract-a,train,Nevada,Acme\n"
+        "contract-c,train,Delaware,Gamma\n"
+        "contract-b,test,New York,Beta\n",
+        encoding="utf-8",
+    )
+    return (
+        "id: mini\n"
+        "dev_fraction: 0\n"
+        "sources:\n"
+        "  - id: mini\n"
+        "    licence: cc-by-4.0\n"
+        f"    path: {tmp_path}\n"
+        "attribution:\n"
+        '  - "The Atticus Project, CUAD v1, CC BY 4.0"\n'
+    )
+
+
+def test_execute_train_fits_the_named_category_under_the_cost_guard(tmp_path, capsys):
+    from rosai.modal_app import execute_train
+
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("limit: 256", "limit: 1")
+    )
+    session = _SavingSession()
+    commits: list[int] = []
+    volume = tmp_path / "volume"
+
+    manifest = execute_train(
+        config,
+        _clause_pack(tmp_path),
+        volume,
+        session=session,
+        on_checkpoint=lambda: commits.append(1),
+    )
+
+    assert session.request.texts == (_THINKING_OFF,)
+    assert session.request.epochs == 1
+    assert session.request.checkpoint_every == 50
+    assert session.request.resume_step == 0
+    assert session.request.load_in_4bit is True
+    assert manifest.example_count == 1
+    assert manifest.model_id == "Qwen/Qwen3-8B"
+    assert manifest.thinking is False
+    assert manifest.backend == "unsloth"
+    assert (volume / "adapter" / "adapter_model.safetensors").read_bytes() == b"lora"
+    assert json.loads((volume / "latest.json").read_text(encoding="utf-8")) == {
+        "step": 4
+    }
+    assert commits == [1]
+    assert "1.043808" in capsys.readouterr().out
+    assert "unsloth" not in sys.modules
+    assert "torch" not in sys.modules
+
+
+def test_execute_train_refuses_a_ceiling_breach_before_fit(tmp_path):
+    from rosai.cost import CostCeilingError
+    from rosai.modal_app import execute_train
+
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("gpu_seconds: 1200", "gpu_seconds: 3600")
+    )
+    session = _SavingSession()
+
+    with pytest.raises(CostCeilingError):
+        execute_train(
+            config,
+            _clause_pack(tmp_path),
+            tmp_path / "volume",
+            session=session,
+        )
+
+    assert session.request is None
+    assert not (tmp_path / "volume" / "adapter").exists()
+
+
+def test_execute_train_resumes_from_the_recorded_step(tmp_path):
+    from rosai.modal_app import execute_train, record_checkpoint
+
+    volume = tmp_path / "volume"
+    record_checkpoint(volume, 50)
+    session = _SavingSession()
+
+    execute_train(
+        Path("configs/modal-lean.yaml").read_text(encoding="utf-8"),
+        _clause_pack(tmp_path),
+        volume,
+        session=session,
+    )
+
+    assert session.request.resume_step == 50
+    assert json.loads((volume / "latest.json").read_text(encoding="utf-8")) == {
+        "step": 4
+    }
+
+
+def test_execute_train_refuses_a_backend_other_than_unsloth(tmp_path):
+    from rosai.modal_app import execute_train
+    from rosai.train import TrainingError
+
+    config = (
+        Path("configs/modal-lean.yaml")
+        .read_text(encoding="utf-8")
+        .replace("backend: unsloth", "backend: fake")
+    )
+    session = _SavingSession()
+
+    with pytest.raises(TrainingError):
+        execute_train(
+            config,
+            _clause_pack(tmp_path),
+            tmp_path / "volume",
+            session=session,
+        )
+
+    assert session.request is None
 
 
 def test_default_backend_imports_unsloth_only_inside_fit(tmp_path):
