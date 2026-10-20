@@ -488,6 +488,14 @@ class _FakeModal:
                 self.initial_delay = initial_delay
                 self.max_retries = max_retries
 
+        class Secret:
+            def __init__(self, name: str) -> None:
+                self.name = name
+
+            @classmethod
+            def from_name(cls, name: str) -> "Secret":
+                return cls(name)
+
         class App:
             def __init__(self, name: str, image=None) -> None:
                 self.name = name
@@ -510,6 +518,7 @@ class _FakeModal:
         self.Image = Image
         self.Volume = Volume
         self.Retries = Retries
+        self.Secret = Secret
         self.App = App
 
 
@@ -550,6 +559,8 @@ def test_remote_train_saves_the_lora_adapter_and_commits_the_volume(
         assert remote.resources["timeout"] == 10800
         assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
         assert remote.resources["retries"].max_retries == 3
+        assert remote.resources["secrets"][0].name == "huggingface"
+        assert app.app.name == "rosai-train"
         image = remote.resources["image"]
         assert "unsloth" in image.packages
         assert "torch" in image.packages
@@ -656,6 +667,7 @@ def test_remote_eval_writes_held_out_predictions_and_commits(tmp_path, monkeypat
         assert remote.resources["cpu"] == 8
         assert remote.resources["memory"] == 32768
         assert remote.resources["volumes"]["/checkpoints"].name == "rosai-checkpoints"
+        assert remote.resources["secrets"][0].name == "huggingface"
         image = remote.resources["image"]
         assert "vllm" in image.packages
         assert image.variables["HF_HOME"] == "/checkpoints/hf"

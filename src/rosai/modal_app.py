@@ -280,6 +280,7 @@ def _deployed_resources(volume, modal) -> dict:
         "memory": memory,
         "timeout": timeout,
         "volumes": {"/checkpoints": volume},
+        "secrets": [modal.Secret.from_name("huggingface")],
         "retries": modal.Retries(initial_delay=0.0, max_retries=3),
     }
 
@@ -300,6 +301,7 @@ def _eval_resources(volume, modal) -> dict:
         "memory": memory,
         "timeout": timeout,
         "volumes": {"/checkpoints": volume},
+        "secrets": [modal.Secret.from_name("huggingface")],
         "retries": modal.Retries(initial_delay=0.0, max_retries=3),
     }
 
@@ -331,7 +333,7 @@ def _train_image(modal):
 
 def _attach(modal) -> None:
     """Decorate the remote functions only when the Modal SDK is installed."""
-    global train, evaluate
+    global train, evaluate, app
     volume = modal.Volume.from_name("rosai-checkpoints", create_if_missing=True)
     image = modal.Image.debian_slim(python_version="3.12").pip_install("pyyaml")
     app = modal.App("rosai-train", image=image)
@@ -410,6 +412,8 @@ def _attach(modal) -> None:
             Path(pack).read_text(encoding="utf-8"),
         )
 
+
+app = None
 
 try:
     import modal as _modal
