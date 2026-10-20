@@ -33,14 +33,20 @@ def guard(
     memory_gib: int,
     max_usd: float,
     max_gpu_hours: float,
+    retries: int = 0,
 ) -> float:
+    attempts = retries + 1
+    priced_seconds = seconds * attempts
     usd = estimate_cost(
-        gpu=gpu, seconds=seconds, cpu_cores=cpu_cores, memory_gib=memory_gib
+        gpu=gpu,
+        seconds=priced_seconds,
+        cpu_cores=cpu_cores,
+        memory_gib=memory_gib,
     )
-    gpu_hours = seconds / 3600
+    gpu_hours = priced_seconds / 3600
     print(
         f"estimate ${usd:.6f} on preemptible {gpu} "
-        f"for {seconds}s, {cpu_cores} cores, {memory_gib} GiB"
+        f"for {seconds}s x {attempts} attempts, {cpu_cores} cores, {memory_gib} GiB"
     )
     reasons: list[str] = []
     if usd > max_usd:

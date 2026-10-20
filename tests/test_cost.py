@@ -52,3 +52,46 @@ def test_gpu_hour_ceiling_refuses_a_run_that_is_still_under_the_dollar_cap():
             max_gpu_hours=3,
         )
     assert "gpu hours" in str(exc.value)
+
+
+def test_one_retry_prices_two_attempts_of_a_lean_a100(capsys):
+    # 2 * 1200 * (0.000694 + 8 * 0.0000131 + 32 * 0.00000222)
+    usd = guard(
+        gpu="A100-80GB",
+        seconds=1200,
+        cpu_cores=8,
+        memory_gib=32,
+        max_usd=3,
+        max_gpu_hours=1,
+        retries=1,
+    )
+    assert usd == 2.087616
+    assert "2.087616" in capsys.readouterr().out
+
+
+def test_three_retries_are_refused_when_four_attempts_pass_the_dollar_ceiling():
+    with pytest.raises(CostCeilingError) as exc:
+        guard(
+            gpu="A100-80GB",
+            seconds=1200,
+            cpu_cores=8,
+            memory_gib=32,
+            max_usd=3,
+            max_gpu_hours=4,
+            retries=3,
+        )
+    assert "4.175232" in str(exc.value)
+
+
+def test_retry_attempts_count_against_the_gpu_hour_ceiling():
+    with pytest.raises(CostCeilingError) as exc:
+        guard(
+            gpu="A100-80GB",
+            seconds=1200,
+            cpu_cores=8,
+            memory_gib=32,
+            max_usd=100,
+            max_gpu_hours=1,
+            retries=3,
+        )
+    assert "gpu hours" in str(exc.value)
