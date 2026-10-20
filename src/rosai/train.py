@@ -209,6 +209,27 @@ def train(prepared: Prepared, run: Run, backend, dest: str | Path) -> Manifest:
     return manifest
 
 
+def resume_checkpoint(output_dir: str | Path, resume_step: int) -> str | bool:
+    """Latest Hugging Face checkpoint, or False when this run should start fresh."""
+    if resume_step <= 0:
+        return False
+    output = Path(output_dir)
+    if not output.is_dir():
+        return False
+    found = []
+    for path in output.glob("checkpoint-*"):
+        if not path.is_dir():
+            continue
+        suffix = path.name.split("-", 1)[1]
+        if not suffix.isdigit():
+            continue
+        found.append((int(suffix), path))
+    if not found:
+        return False
+    found.sort()
+    return str(found[-1][1])
+
+
 def on_save_checkpoint(directory: str | Path, step: int, commit) -> None:
     """Record a preemptible step, then commit the volume if a commit hook was given."""
     from rosai.modal_app import record_checkpoint
@@ -283,7 +304,11 @@ def fit_qlora(request: QloraRequest, on_checkpoint=None) -> int:
             )
 
     trainer.add_callback(_Commit())
-    stats = trainer.train(resume_from_checkpoint=request.resume_step > 0)
+    stats = trainer.train(
+        resume_from_checkpoint=resume_checkpoint(
+            request.output_dir, request.resume_step
+        )
+    )
     Path(request.adapter_dir).mkdir(parents=True, exist_ok=True)
     model.save_pretrained(request.adapter_dir)
     tokenizer.save_pretrained(request.adapter_dir)

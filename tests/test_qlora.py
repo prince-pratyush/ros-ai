@@ -136,6 +136,17 @@ def test_fit_fails_when_the_session_does_not_save_the_adapter(tmp_path):
     assert not (tmp_path / "manifest.json").exists()
 
 
+def test_resume_uses_the_latest_trainer_checkpoint(tmp_path):
+    from rosai.train import resume_checkpoint
+
+    assert resume_checkpoint(str(tmp_path), 0) is False
+    assert resume_checkpoint(str(tmp_path), 50) is False
+    (tmp_path / "checkpoint-20").mkdir()
+    (tmp_path / "checkpoint-100").mkdir()
+
+    assert resume_checkpoint(str(tmp_path), 50) == str(tmp_path / "checkpoint-100")
+
+
 def test_a_checkpoint_save_records_the_step_and_commits(tmp_path):
     from rosai.train import on_save_checkpoint
 
