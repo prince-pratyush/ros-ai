@@ -45,6 +45,102 @@ def test_cache_reuses_matching_bytes_and_replaces_a_bad_file(tmp_path):
     assert (tmp_path / digest).read_bytes() == payload
 
 
+# Question strings from the pinned CUAD data.zip, in inventory order.
+_ALL_CATEGORIES = (
+    "Document Name",
+    "Parties",
+    "Agreement Date",
+    "Effective Date",
+    "Expiration Date",
+    "Renewal Term",
+    "Notice Period To Terminate Renewal",
+    "Governing Law",
+    "Most Favored Nation",
+    "Non-Compete",
+    "Exclusivity",
+    "No-Solicit Of Customers",
+    "Competitive Restriction Exception",
+    "No-Solicit Of Employees",
+    "Non-Disparagement",
+    "Termination For Convenience",
+    "Rofr/Rofo/Rofn",
+    "Change Of Control",
+    "Anti-Assignment",
+    "Revenue/Profit Sharing",
+    "Price Restrictions",
+    "Minimum Commitment",
+    "Volume Restriction",
+    "Ip Ownership Assignment",
+    "Joint Ip Ownership",
+    "License Grant",
+    "Non-Transferable License",
+    "Affiliate License-Licensor",
+    "Affiliate License-Licensee",
+    "Unlimited/All-You-Can-Eat-License",
+    "Irrevocable Or Perpetual License",
+    "Source Code Escrow",
+    "Post-Termination Services",
+    "Audit Rights",
+    "Uncapped Liability",
+    "Cap On Liability",
+    "Liquidated Damages",
+    "Warranty Duration",
+    "Insurance",
+    "Covenant Not To Sue",
+    "Third Party Beneficiary",
+)
+
+
+def test_full_configs_list_every_cuad_category(tmp_path):
+    from rosai.cuad import load_categories
+
+    assert len(_ALL_CATEGORIES) == 41
+    assert len(set(_ALL_CATEGORIES)) == 41
+    for name in ("configs/modal-full.yaml", "configs/modal-eval-full.yaml"):
+        raw = yaml.safe_load(Path(name).read_text(encoding="utf-8"))
+        assert tuple(raw["categories"]) == _ALL_CATEGORIES
+        assert load_categories(name) == _ALL_CATEGORIES
+
+    spans = {category: () for category in _ALL_CATEGORIES}
+    spans["Governing Law"] = ("Nevada",)
+    spans["Parties"] = ("Acme",)
+    payload = _archive_categories((("contract-a", "train", spans),))
+    pack = _pinned_pack(tmp_path, dev_fraction="0")
+    prepared = prepare(
+        load_pack(pack),
+        archive=payload,
+        categories=load_categories("configs/modal-full.yaml"),
+    )
+
+    assert len(prepared.train) == 41
+    assert prepared.dev == ()
+    assert prepared.held_out == ()
+    by_question = {pair.messages[0][1]: pair.completion for pair in prepared.train}
+    assert by_question["Quote the Governing Law clause or answer none."] == "Nevada"
+    assert by_question["Quote the Parties clause or answer none."] == "Acme"
+    assert by_question["Quote the Document Name clause or answer none."] == "none"
+    assert (
+        by_question["Quote the Third Party Beneficiary clause or answer none."]
+        == "none"
+    )
+    assert [pair.document_id for pair in prepared.train] == ["contract-a"] * 41
+
+
+def test_fake_and_mac_dry_default_to_governing_law(monkeypatch):
+    from rosai.cuad import load_categories
+
+    monkeypatch.delenv("ROSAI_DOWNLOAD_CUAD", raising=False)
+
+    def explode(url):
+        raise AssertionError(url)
+
+    monkeypatch.setattr("urllib.request.urlopen", explode)
+    for name in ("configs/fake.yaml", "configs/mac-dry.yaml"):
+        raw = yaml.safe_load(Path(name).read_text(encoding="utf-8"))
+        assert "categories" not in raw
+        assert load_categories(name) == ("Governing Law",)
+
+
 def test_config_rejects_an_unknown_category(tmp_path):
     from rosai.cuad import load_categories
 
