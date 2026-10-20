@@ -131,6 +131,8 @@ class UnslothBackend:
         if self.run.thinking:
             raise TrainingError("Qwen3 QLoRA keeps thinking off")
         texts = tuple(format_pair(example, thinking=False) for example in examples)
+        if not texts:
+            raise TrainingError("no training pairs")
         adapter_dir = self.dest / "adapter"
         request = QloraRequest(
             model_id=self.run.model_id,

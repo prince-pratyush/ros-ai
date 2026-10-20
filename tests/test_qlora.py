@@ -263,6 +263,36 @@ def test_execute_train_resumes_from_the_recorded_step(tmp_path):
     }
 
 
+def test_execute_train_refuses_an_empty_train_split(tmp_path):
+    from rosai.modal_app import execute_train
+    from rosai.train import TrainingError
+
+    (tmp_path / "labels.csv").write_text(
+        "document_id,split,Governing Law\ncontract-b,test,Nevada\n",
+        encoding="utf-8",
+    )
+    pack = (
+        "id: mini\n"
+        "dev_fraction: 0\n"
+        "sources:\n"
+        "  - id: mini\n"
+        "    licence: cc-by-4.0\n"
+        f"    path: {tmp_path}\n"
+    )
+    session = _SavingSession()
+
+    with pytest.raises(TrainingError):
+        execute_train(
+            Path("configs/modal-lean.yaml").read_text(encoding="utf-8"),
+            pack,
+            tmp_path / "volume",
+            session=session,
+        )
+
+    assert session.request is None
+    assert not (tmp_path / "volume" / "adapter").exists()
+
+
 def test_execute_train_refuses_thinking(tmp_path):
     from rosai.modal_app import execute_train
     from rosai.train import TrainingError
