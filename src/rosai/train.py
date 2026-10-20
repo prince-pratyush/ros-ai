@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from rosai.prepare import Prepared
+from rosai.prepare import InstructionPair, Prepared
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,24 @@ def load_run(path: str | Path) -> Run:
         limit=None if limit is None else int(limit),
         backend=str(raw.get("backend") or "fake"),
         batch_size=int(raw.get("batch_size", 1)),
+    )
+
+
+class TrainingError(Exception):
+    """A run cannot be trained as configured."""
+
+
+def format_pair(pair: InstructionPair, *, thinking: bool) -> str:
+    """Qwen3 chat text. Thinking stays off, so the assistant turn is an empty think block."""
+    if thinking:
+        raise TrainingError("Qwen3 QLoRA keeps thinking off")
+    question = pair.messages[0][1]
+    return (
+        "<|im_start|>user\n"
+        f"{question}<|im_end|>\n"
+        "<|im_start|>assistant\n"
+        "<think>\n\n</think>\n\n"
+        f"{pair.completion}<|im_end|>\n"
     )
 
 
